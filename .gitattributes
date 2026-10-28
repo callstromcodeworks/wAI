@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.tiktoken -text
+*.bin -text
+*.npy -text

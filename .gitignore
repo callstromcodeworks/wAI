@@ -1,0 +1,8 @@
+build/
+__pycache__/
+*.pyc
+model/data/
+model/runs/
+vocab/training/work/
+*.counts
+*.shard

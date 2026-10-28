@@ -1,0 +1,101 @@
+# split  name  url  [sparse dirs...]   (no dirs = full shallow clone)
+# ---------------- code, training ----------------
+train cpython https://github.com/python/cpython Lib Modules Objects Python Include Doc
+train django https://github.com/django/django
+train numpy https://github.com/numpy/numpy numpy
+train pandas https://github.com/pandas-dev/pandas pandas
+train sklearn https://github.com/scikit-learn/scikit-learn sklearn
+train transformers https://github.com/huggingface/transformers src
+train ansible https://github.com/ansible/ansible lib
+train sympy https://github.com/sympy/sympy sympy
+train pytorch https://github.com/pytorch/pytorch torch aten/src/ATen/native c10
+train homeassistant https://github.com/home-assistant/core homeassistant/components/zha homeassistant/components/mqtt homeassistant/helpers homeassistant/core.py homeassistant/components/sensor
+train vscode https://github.com/microsoft/vscode src/vs/editor src/vs/workbench/contrib/debug src/vs/base src/vs/platform
+train react https://github.com/facebook/react packages
+train angular https://github.com/angular/angular packages/core packages/compiler packages/common packages/router packages/forms
+train nextjs https://github.com/vercel/next.js packages/next/src
+train node https://github.com/nodejs/node lib src doc
+train typescript https://github.com/microsoft/TypeScript src
+train vue https://github.com/vuejs/core packages
+train svelte https://github.com/sveltejs/svelte packages
+train webpack https://github.com/webpack/webpack lib
+train linux https://github.com/torvalds/linux kernel mm fs/ext4 net/ipv4 drivers/net/ethernet/intel include/linux
+train git https://github.com/git/git
+train curl https://github.com/curl/curl lib src docs
+train redis https://github.com/redis/redis src
+train opencv https://github.com/opencv/opencv modules/core modules/imgproc modules/dnn/src
+train godot https://github.com/godotengine/godot core scene editor/plugins
+train llvm https://github.com/llvm/llvm-project llvm/lib/Transforms llvm/lib/CodeGen/SelectionDAG clang/lib/Sema
+train protobuf https://github.com/protocolbuffers/protobuf src/google/protobuf
+train bitcoin https://github.com/bitcoin/bitcoin src
+train spring https://github.com/spring-projects/spring-framework spring-core spring-context spring-web spring-webmvc
+train kafka https://github.com/apache/kafka clients/src/main core/src/main
+train elasticsearch https://github.com/elastic/elasticsearch server/src/main/java/org/elasticsearch/index server/src/main/java/org/elasticsearch/search
+train guava https://github.com/google/guava guava/src
+train kotlin https://github.com/JetBrains/kotlin compiler/frontend libraries/stdlib/src
+train nowinandroid https://github.com/android/nowinandroid
+train okhttp https://github.com/square/okhttp okhttp
+train coroutines https://github.com/Kotlin/kotlinx.coroutines kotlinx-coroutines-core
+train golang https://github.com/golang/go src/net src/runtime src/cmd/compile/internal/ssa src/go src/encoding
+train kubernetes https://github.com/kubernetes/kubernetes pkg/kubelet pkg/controller pkg/scheduler staging/src/k8s.io/client-go/tools
+train moby https://github.com/moby/moby daemon
+train prometheus https://github.com/prometheus/prometheus
+train terraform https://github.com/hashicorp/terraform internal
+train hugo https://github.com/gohugoio/hugo
+train rust https://github.com/rust-lang/rust compiler/rustc_middle compiler/rustc_hir_typeck library/core library/std library/alloc
+train tokio https://github.com/tokio-rs/tokio
+train deno https://github.com/denoland/deno cli ext runtime
+train cargo https://github.com/rust-lang/cargo src
+train ripgrep https://github.com/BurntSushi/ripgrep
+train dotnetruntime https://github.com/dotnet/runtime src/libraries/System.Private.CoreLib src/libraries/System.Linq src/libraries/System.Text.Json/src
+train aspnetcore https://github.com/dotnet/aspnetcore src/Mvc src/Http
+train powershell https://github.com/PowerShell/PowerShell src/System.Management.Automation
+train swift https://github.com/apple/swift stdlib/public/core lib/Sema
+train alamofire https://github.com/Alamofire/Alamofire Source
+train rails https://github.com/rails/rails activerecord actionpack activesupport
+train discourse https://github.com/discourse/discourse app lib
+train laravel https://github.com/laravel/framework src
+train symfony https://github.com/symfony/symfony src/Symfony/Component/HttpKernel src/Symfony/Component/Console src/Symfony/Component/DependencyInjection
+train wordpress https://github.com/WordPress/WordPress wp-includes wp-admin/includes
+train spark https://github.com/apache/spark core/src/main sql/core/src/main/scala
+train flutter https://github.com/flutter/flutter packages/flutter/lib
+train neovim https://github.com/neovim/neovim src runtime/lua
+train ohmyzsh https://github.com/ohmyzsh/ohmyzsh
+# ---------------- English docs, training ----------------
+train azuredocs https://github.com/MicrosoftDocs/azure-docs articles/**/*.md
+train dotnetdocs https://github.com/dotnet/docs docs/csharp docs/core docs/standard docs/fundamentals
+train mdn https://github.com/mdn/content files/en-us
+train githubdocs https://github.com/github/docs content
+train progit https://github.com/progit/progit2 book
+train ydkjs https://github.com/getify/You-Dont-Know-JS
+train sysdesign https://github.com/donnemartin/system-design-primer README.md
+train rustbook https://github.com/rust-lang/book src
+train sqldocs https://github.com/MicrosoftDocs/sql-docs **/*.md
+train psdocs https://github.com/MicrosoftDocs/PowerShell-Docs **/*.md
+# ---------------- held-out (never used for training) ----------------
+heldout flask https://github.com/pallets/flask src docs
+heldout requests https://github.com/psf/requests src
+heldout express https://github.com/expressjs/express lib
+heldout lodash https://github.com/lodash/lodash src
+heldout nlohmannjson https://github.com/nlohmann/json include
+heldout sqlite https://github.com/sqlite/sqlite src
+heldout retrofit https://github.com/square/retrofit retrofit
+heldout okio https://github.com/square/okio okio/src
+heldout gin https://github.com/gin-gonic/gin
+heldout cobra https://github.com/spf13/cobra
+heldout serde https://github.com/serde-rs/serde serde serde_derive
+heldout clap https://github.com/clap-rs/clap clap_builder
+heldout newtonsoft https://github.com/JamesNK/Newtonsoft.Json Src/Newtonsoft.Json
+heldout jekyll https://github.com/jekyll/jekyll lib
+heldout composer https://github.com/composer/composer src
+heldout vapor https://github.com/vapor/vapor Sources
+heldout k8swebsite https://github.com/kubernetes/website content/en/docs/concepts content/en/docs/tasks
+heldout postgresdocs https://github.com/postgres/postgres doc/src/sgml
+heldout black https://github.com/psf/black src
+heldout httpx https://github.com/encode/httpx httpx
+heldout fastapi https://github.com/fastapi/fastapi fastapi
+heldout click https://github.com/pallets/click src
+heldout axios https://github.com/axios/axios lib
+heldout chartjs https://github.com/chartjs/Chart.js src
+heldout prettier https://github.com/prettier/prettier src
+heldout threejs https://github.com/mrdoob/three.js src
