@@ -1,0 +1,7 @@
+# Python 3.11+ on Linux with an NVIDIA GPU (CUDA 12.8+ driver). Most GPU images ship torch already;
+# keep theirs if it's 2.8 or newer (FlexAttention and FP8 matmuls are needed).
+torch>=2.8
+numpy>=2.0
+pyarrow>=15
+huggingface-hub>=0.24
+tiktoken>=0.8   # only for tests/test_vs_tiktoken.py
