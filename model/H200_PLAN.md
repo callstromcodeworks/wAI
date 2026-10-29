@@ -70,3 +70,10 @@ integration window 8, mlp_ratio 8 (twice the neurons) 1.1886 at 45k tok/s. 1-bit
 whatever the integration or neuron count; on a GPU they're slower, not faster. Next: rate coding
 (0-3 spikes per token, 2 bits), the brain's own answer to 1-bit spikes.
 H200: b32k_bank3_t1b_s7 done; first bigbank2 run done (13 min); ec64k shards ready.
+
+**09:50 UTC. Phase 1 results.** Earned-say critic at 1B tokens, 3 seeds: no critic 0.9343 / 0.9269 / 0.9278
+(mean 0.9297), critic 0.9319 / 0.9279 / 0.9253 (mean 0.9284): -0.0013, 2 of 3 seeds; suggestive, within
+seed spread (~0.004). bigbank2 (100M): 32 routed at capacity 2.0: 1.1429 / 1.1405 (mean 1.1417); 64 routed:
+1.1418 / 1.1411 (1.1415); capacity 1.25 was 1.1464, so capacity helped, 64 adds nothing over 32. H200
+runs score lower than RTX 4070 runs at equal settings (no-critic 1B: 0.927 vs 0.934), so plain8 baselines
+get rerun on the H200 (queue h200base). Phase 2 started 09:44 (scale first, 2 slots).
