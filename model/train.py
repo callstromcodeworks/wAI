@@ -502,6 +502,8 @@ def main():
     t_log, steps_since_log, timed_steps, timed_time = time.perf_counter(), 0, 0, 0.0
     train_start = time.perf_counter()
     train_time = 0.0  # wall time spent in training steps (excludes eval and checkpoints)
+    bad_steps = 0  # consecutive skipped steps (non-finite loss or gradient)
+    params = [p for p in model.parameters() if p.requires_grad]
     while total_steps is None or step < total_steps:
         t_step = time.perf_counter()
         mult = lr_multiplier(step, total_steps or 10**9, args.warmup_steps, args.cooldown_frac)
@@ -512,6 +514,7 @@ def main():
             g["lr"] = g["base_lr"] * mult
 
         step_parts = {}  # this step's loss parts, averaged over micro-batches (brain: balancer, critic trust)
+        step_main = torch.zeros((), device="cuda")
         for micro in range(accum):
             rows = prefetch.next()
             x, y = rows[:, :-1].contiguous(), rows[:, 1:].contiguous()
@@ -520,10 +523,24 @@ def main():
             loss, parts = step_loss(model, h, y, args, offset=(step * accum + micro) % args.aux_stride)
             loss = loss / accum
             loss.backward()
-            loss_acc += parts.get("main", loss.detach() * accum) / accum
+            step_main += parts.get("main", loss.detach() * accum) / accum
             for k, v in parts.items():
-                parts_acc[k] = parts_acc.get(k, 0) + v / accum
                 step_parts[k] = step_parts.get(k, 0) + v / accum
+        # guard: a non-finite loss or gradient skips the step (weights untouched); a run that stays broken
+        # stops without saving, so its last checkpoint is still good
+        gnorm = torch.stack(torch._foreach_norm([p.grad for p in params if p.grad is not None])).float().sum()
+        if not torch.isfinite(step_main + gnorm).item():
+            model.zero_grad(set_to_none=True)
+            bad_steps += 1
+            print(f"step {step}: non-finite loss or gradient, skipped ({bad_steps} in a row)", flush=True)
+            if bad_steps >= 20:
+                print("failed: training diverged (20 non-finite steps in a row); last checkpoint kept", flush=True)
+                raise SystemExit(3)
+            continue
+        bad_steps = 0
+        loss_acc += step_main
+        for k, v in step_parts.items():
+            parts_acc[k] = parts_acc.get(k, 0) + v
         muon.step()
         adam.step()
         model.zero_grad(set_to_none=True)
