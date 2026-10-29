@@ -77,3 +77,8 @@ seed spread (~0.004). bigbank2 (100M): 32 routed at capacity 2.0: 1.1429 / 1.140
 1.1418 / 1.1411 (1.1415); capacity 1.25 was 1.1464, so capacity helped, 64 adds nothing over 32. H200
 runs score lower than RTX 4070 runs at equal settings (no-critic 1B: 0.927 vs 0.934), so plain8 baselines
 get rerun on the H200 (queue h200base). Phase 2 started 09:44 (scale first, 2 slots).
+
+**11:06 UTC. Phase 1 complete (18/18).** At 1B tokens on the H200: plain8 0.9341, 32-routed sparse bank
+(capacity 2.0, revival) 0.9296, dense bank3 0.9269 / 0.9278. The module bank's edge grows with training
+(level at 100M, ~0.005-0.007 better at 1B): the first brain component that clearly beats plain on the
+same hardware. Phase 2 restarted at 4 parallel: scale (medium plain / brain / ec64k), h200base, memory2.
