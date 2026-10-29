@@ -219,6 +219,8 @@ def run(a):
                 loss, parts = model.train_loss(out, y, draft_weight=0.0, critic_weight=0.0, balance_weight=0.0)
             else:
                 loss = model.loss(out, y)
+            if not torch.isfinite(loss):  # never train on, or report, a diverged model
+                raise SystemExit(f"non-finite loss at step {step}: run stopped, results not saved")
             (loss / a.accum).backward()
         for opt in (muon, adam):
             if opt:
@@ -307,6 +309,8 @@ def continual(a):
                 with torch.autocast("cuda", torch.bfloat16), sdpa_kernel(SDPA_BACKENDS, set_priority=True):
                     out = model(r[:, :-1])
                 loss = model.train_loss(out, r[:, 1:], draft_weight=0.0, critic_weight=0.0, balance_weight=0.0)[0]
+                if not torch.isfinite(loss):  # never train on, or report, a diverged model
+                    raise SystemExit(f"non-finite loss at step {step}: run stopped, results not saved")
                 (loss / a.accum).backward()
             opt.step()
             model.zero_grad(set_to_none=True)
@@ -426,7 +430,7 @@ def continual(a):
             pruned.append(prune(keys[0], a.per_stage, new))
             print(f"  pruned {keys[0]}: harm {pruned[-1][0]} -> silenced {pruned[-1][1]}", flush=True)
         if a.consolidate_steps:  # sleep: replay only, the new material seen so far mixed with general text
-            train(params, a.consolidate_steps, seen, 0.5, a.lr_adam / 3)
+            train(params, a.consolidate_steps, seen, a.sleep_new, a.lr_adam / 3)
         for p in params:
             p.requires_grad_(False)  # matured: this stage's modules stop changing
         curve.append(evaluate(f"stage {st + 1} ({','.join(keys)})"))
@@ -476,6 +480,7 @@ def main():
                     help="continual: where new modules go")
     ap.add_argument("--init", default="copy", choices=["copy", "copy_active", "fresh"],
                     help="continual: new module internals")
+    ap.add_argument("--sleep_new", type=float, default=0.5, help="continual: share of new material in sleep replay")
     ap.add_argument("--depths", default="", help="continual, fixed placement: depths per stage (default 1,3,5,...)")
     ap.add_argument("--overgrow", type=int, default=1, help="continual: grow this many times per_stage, keep the most useful")
     ap.add_argument("ckpt", nargs="?")
