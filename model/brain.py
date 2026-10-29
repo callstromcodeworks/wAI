@@ -411,6 +411,9 @@ class BrainGPT(GPT):
                     usage = fired.detach().flatten(0, 1).mean(0)
                 if self.memory is not None:
                     add = add + self.memory(x)
+                if getattr(self, "grown", None) is not None:  # modules added later (forgetting.py grow)
+                    g = torch.sigmoid(self.grown_gate(norm(x)).float())                  # [B, T, k]
+                    add = add + self.grown(x, cos_m, sin_m, g.to(x.dtype))[0]
                 x = x + add
             if i == L - c.gate_layers:
                 draft = x
