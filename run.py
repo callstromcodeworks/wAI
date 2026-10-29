@@ -87,9 +87,13 @@ def run_dir(name):
 
 
 def run_state(name):
-    """done / partial (a checkpoint to resume) / new."""
+    """diverged / done / partial (a checkpoint to resume) / new. A non-finite loss or eval anywhere in the
+    output makes a run DIVERGED, whatever else it printed: its results and checkpoint can't be trusted."""
     out = os.path.join(run_dir(name), "stdout.txt")
-    if os.path.exists(out) and re.search(r"^done:", open(out, errors="replace").read(), re.M):
+    text = open(out, errors="replace").read() if os.path.exists(out) else ""
+    if re.search(r"loss nan|bpb nan|non-finite|diverged", text, re.I):
+        return "DIVERGED"
+    if re.search(r"^done:", text, re.M):
         return "done"
     return "partial" if os.path.exists(os.path.join(run_dir(name), "ckpt.pt")) else "new"
 
@@ -213,7 +217,7 @@ def cmd_train(a):
             raise SystemExit(f"{n} has no --tokens budget: time-budgeted runs can't share a GPU fairly")
     total = torch.cuda.mem_get_info()[1] / 2**30
     vram = a.vram_gb or round(total * 0.92 / a.parallel, 1)
-    todo = [n for n in names if run_state(n) != "done"]
+    todo = [n for n in names if run_state(n) not in ("done", "DIVERGED")]  # a diverged run is not retried blindly
     say(f"{len(names)} runs, {len(names) - len(todo)} already done; {a.parallel} at a time, {vram} GiB VRAM each "
         f"(GPU: {total:.0f} GiB)")
     os.makedirs(RUNS, exist_ok=True)
