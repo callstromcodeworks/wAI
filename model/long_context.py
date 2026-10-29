@@ -1,6 +1,7 @@
 """Does a model use long context? Bits per byte by position in long documents.
 
     python model/long_context.py runs/sweep_m_full/ckpt.pt runs/sweep_m_concept/ckpt.pt [--length 8192]
+    python model/long_context.py runs/sweep_m32k_full runs/sweep_m32k_concept   # exported runs (safetensors)
 
 Takes the validation documents of at least --length tokens from each source (English, code),
 scores their first --length tokens, and reports bits per byte for positions 0-1k, 1-2k, 2-4k and
@@ -20,6 +21,7 @@ import numpy as np
 import torch
 from torch.nn.attention import sdpa_kernel
 
+import safe_checkpoint
 from gpt import GPT, GPTConfig
 from prepare_data import load_shard
 from tokenizer import VOCABS
@@ -55,15 +57,20 @@ def reads_per_query(cfg, L):
 
 @torch.no_grad()
 def evaluate(path, docs_by_source, length):
-    ck = torch.load(path, map_location="cpu", weights_only=False)
-    cfg = GPTConfig(**{**ck["config"], "seq_len": length})  # RoPE tables for the evaluation length
-    with torch.device("cuda"):
-        model = GPT(cfg)
-    model.load_state_dict(ck["model"])
+    if path.endswith(".pt"):  # a checkpoint made on this machine
+        ck = torch.load(path, map_location="cpu", weights_only=False)
+        cfg = GPTConfig(**{**ck["config"], "seq_len": length})  # RoPE tables for the evaluation length
+        with torch.device("cuda"):
+            model = GPT(cfg)
+        model.load_state_dict(ck["model"])
+    else:  # an exported run (safetensors + JSON): nothing is unpickled, safe for runs from elsewhere
+        model, ck = safe_checkpoint.load_model(path, seq_len=length)
+        cfg = model.cfg
     model.eval()
     vocab = ck["args"]["vocab"]
     token_bytes = torch.from_numpy(token_byte_lengths(VOCABS[vocab], cfg.vocab_size)).cuda()
-    res = {"run": os.path.basename(os.path.dirname(path)), "train_len": ck["config"]["seq_len"],
+    run = path if os.path.isdir(path) else os.path.dirname(path)
+    res = {"run": os.path.basename(os.path.normpath(run)), "train_len": ck["config"]["seq_len"],
            "attn_mode": cfg.attn_mode, "fast_heads": cfg.fast_heads}
     res["keys_per_query"], res["gpu_keys"] = reads_per_query(cfg, length)
     for source, docs in docs_by_source.items():

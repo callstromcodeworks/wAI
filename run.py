@@ -8,6 +8,7 @@
     python run.py train [--queue memory,critic1b] [--parallel 4]
     python run.py status                    # progress of every queued run
     python run.py eval                      # long-context scores + the sweep summary table
+    python run.py export                    # finished runs -> safetensors + JSON, safe to take home
 
 Training runs several experiments at the same time on one big GPU (an H200 NVL has 141 GB): each
 run gets an equal share of VRAM (--vram_gb, default: 92% of the card / --parallel) and the GPU's
@@ -290,9 +291,28 @@ def cmd_eval(a):
     return 0
 
 
+def cmd_export(a):
+    """Finished runs -> model.safetensors + model.json (weights only, safe to load anywhere)."""
+    sys.path.insert(0, MODEL)
+    import safe_checkpoint
+    n = 0
+    for runs in queues().values():
+        for name in runs:
+            ck = os.path.join(run_dir(name), "ckpt.pt")
+            done = os.path.join(run_dir(name), "model.safetensors")
+            if run_state(name) == "done" and (not os.path.exists(done) or os.path.getmtime(done) < os.path.getmtime(ck)):
+                safe_checkpoint.export(ck)
+                n += 1
+                say(f"  exported {name}")
+    say(f"{n} runs exported. To bring results home without any pickle files:")
+    say("  rsync -av --include='*/' --include='*.safetensors' --include='*.json' --include='*.jsonl' "
+        "--include='*.txt' --exclude='*' <host>:wAI/model/runs/ ./runs/")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["all", "setup", "data", "test", "train", "status", "eval"])
+    ap.add_argument("command", choices=["all", "setup", "data", "test", "train", "status", "eval", "export"])
     ap.add_argument("--download", action="store_true", help="data: rebuild missing shards from Hugging Face")
     ap.add_argument("--queue", default=DEFAULT_QUEUE, help=f"train: comma-separated queues (default {DEFAULT_QUEUE})")
     ap.add_argument("--parallel", type=int, default=4, help="train: runs at once on the GPU")
@@ -301,8 +321,8 @@ def main():
     ap.add_argument("--stagger", type=int, default=90, help="train: seconds between starting runs")
     a = ap.parse_args()
     steps = {"setup": cmd_setup, "data": cmd_data, "test": cmd_test, "train": cmd_train, "status": cmd_status,
-             "eval": cmd_eval}
-    order = ["setup", "data", "test", "train", "eval"] if a.command == "all" else [a.command]
+             "eval": cmd_eval, "export": cmd_export}
+    order = ["setup", "data", "test", "train", "eval", "export"] if a.command == "all" else [a.command]
     for name in order:
         say(f"\n=== {name} ===")
         rc = steps[name](a)
