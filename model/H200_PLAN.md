@@ -139,3 +139,5 @@ need, copied features: 0.077, +0.0013, +0.0036. Copied features double learning 
 D beats one-shot on both learning and English forgetting; staging + consolidation trades learning for less
 forgetting; gradient placement chose block 4 every time and did slightly worse than spreading. Next: E =
 staged, spread, copied features.
+E staged, spread (blocks 1, 3, 5), copied features: learned 0.080, English +0.0011, code +0.0030: best on both.
+Next: F = 6 stages x 1 module (smaller, more frequent additions), same total.
