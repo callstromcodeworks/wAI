@@ -322,6 +322,7 @@ class BrainGPT(GPT):
         correlated with the draft's real errors, mapped from gate_lo..gate_hi to 0..1, and held at 0
         for the first gate_observe_steps steps. All tensor ops, so no GPU sync."""
         c = self.cfg
+        super().update_after_step(parts)  # depth routing thresholds, if any
         if "usage" in parts:
             self.update_balance(parts["usage"])
         if not c.critic_gate or "critic_corr" not in parts:

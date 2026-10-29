@@ -66,11 +66,19 @@ class GPTConfig:
     fast_heads: int = 0    # Hebbian fast-weight memory heads per block (0 = none); reset every sequence
     fast_dim: int = 64
     fast_chunk: int = 256
+    # signal / no-signal routing through depth: every depth_every-th block (not the first) has a router;
+    # a token is processed by that block only if its router fires, else it passes on the residual. A
+    # threshold, adjusted after each step, keeps about depth_capacity of the tokens firing (0 = off)
+    depth_every: int = 0
+    depth_capacity: float = 0.25
+    depth_step: float = 0.2      # threshold control gain (0.05 let blocks go silent for 100+ steps)
 
     def __post_init__(self):
         self.n_kv_head = self.n_kv_head or self.n_head
         assert self.d_model % self.n_head == 0 and self.n_head % self.n_kv_head == 0
         assert self.attn_mode in ("full", "window", "concept")
+        assert not self.depth_every or (self.attn_mode == "full" and self.kv_share == 1 and not self.mla_rank
+                                         and not self.fast_heads), "depth routing needs plain full attention"
         assert self.attn_mode == "full" or (not self.mla_rank and self.window % self.concept_block == 0)
         if self.mla_rank:
             assert self.kv_share == 1 and self.n_kv_head == self.n_head, "MLA replaces GQA and K/V sharing"
@@ -117,9 +125,10 @@ def rope_tables(seq_len, head_dim, base, device=None):
 
 
 def apply_rope(x, cos, sin):
-    # x: [B, T, H, D]; rotate the two halves of the head dimension
+    # x: [B, T, H, D]; rotate the two halves of the head dimension. cos/sin: [T, D/2] shared, or [B, T, D/2]
+    # when each sequence has its own positions (tokens routed into a block, see Block)
     x1, x2 = x.float().chunk(2, dim=-1)
-    cos, sin = cos[None, :, None, :], sin[None, :, None, :]
+    cos, sin = (cos[None, :, None, :], sin[None, :, None, :]) if cos.dim() == 2 else (cos[:, :, None, :], sin[:, :, None, :])
     return torch.cat((x1 * cos + x2 * sin, x2 * cos - x1 * sin), dim=-1).type_as(x)
 
 
@@ -220,11 +229,55 @@ class MLP(nn.Module):
 class Block(nn.Module):
     def __init__(self, cfg, layer):
         super().__init__()
+        self.cfg = cfg
         self.attn = Attention(cfg, layer)
         self.fast = FastWeights(cfg) if cfg.fast_heads else None
         self.mlp = MLP(cfg)
+        self.router = None
+        if cfg.depth_every and layer > 0 and layer % cfg.depth_every == cfg.depth_every - 1:
+            self.router = nn.Linear(cfg.d_model, 1, bias=False)
+            self.register_buffer("depth_bias", torch.zeros(()))   # threshold, set by GPT.update_after_step
+            self.register_buffer("wanted", torch.zeros(()))       # share of tokens whose router fired
+            self.register_buffer("fired", torch.zeros(()))        # ... and that fit the block's capacity
+
+    def routed_forward(self, x, cos, sin, ctx):
+        """Only the tokens whose router fires run through this block (in time order, up to capacity);
+        attention inside sees just those tokens, at their real positions. The block's change is scaled by
+        the router's sigmoid so the router learns which tokens are worth processing. Whether a token gets
+        processed depends only on it and earlier tokens, so this stays causal."""
+        B, T, D = x.shape
+        C = max(1, math.ceil(self.cfg.depth_capacity * T))
+        # scale-free score: the router's weight is normalised, so its output can't outgrow the threshold
+        # (raw router logits grew faster than the threshold could follow and blocks went quiet)
+        w = self.router.weight.float()
+        s = (norm(x).float() @ (w / (w.norm() + 1e-6)).t()).squeeze(-1) * 4.0  # [B, T], about -4..4
+        want = (s + self.depth_bias) > 0
+        slot = want.long().cumsum(1) - 1
+        keep = want & (slot < C)
+        dump = torch.where(keep, slot, torch.full_like(slot, C))
+        idx = torch.full((B, C + 1), T, device=x.device, dtype=torch.long)
+        idx.scatter_(1, dump, torch.arange(T, device=x.device).expand(B, T))
+        idx = idx[:, :C]                                                     # [B, C] token in each slot (T = empty)
+        b = torch.arange(B, device=x.device)[:, None]
+        xs = torch.cat([x, x.new_zeros(B, 1, D)], 1)[b, idx]                 # [B, C, D]
+        pos = idx.clamp(max=T - 1)
+        v0 = ctx["v0"]
+        if v0 is not None:  # value residual: the first layer's values at the same tokens
+            v0p = torch.cat([v0, v0.new_zeros(*v0.shape[:2], 1, v0.size(-1))], 2)
+            ctx["v0"] = v0p.gather(2, idx[:, None, :, None].expand(B, v0.size(1), C, v0.size(-1)))
+        y = xs + self.attn(norm(xs), cos[pos], sin[pos], ctx)
+        y = y + self.mlp(norm(y))
+        ctx["v0"] = v0
+        g = torch.cat([torch.sigmoid(s), s.new_zeros(B, 1)], 1)[b, idx]     # router weight per slot
+        out = torch.cat([x, x.new_zeros(B, 1, D)], 1)
+        out.scatter_add_(1, idx[..., None].expand(B, C, D), ((y - xs).float() * g[..., None]).to(x.dtype))
+        self.wanted.copy_(want.float().mean().detach())
+        self.fired.copy_(keep.float().mean().detach())
+        return out[:, :T]
 
     def forward(self, x, cos, sin, ctx):
+        if self.router is not None and ctx["cache"] is None:
+            return self.routed_forward(x, cos, sin, ctx)
         h = norm(x)
         x = x + self.attn(h, cos, sin, ctx)
         if self.fast is not None:  # Hebbian memory reads the same input, in parallel with attention
@@ -314,6 +367,18 @@ class GPT(nn.Module):
     def matrix_params(self):
         return [p for p in self.blocks.parameters() if p.dim() == 2]
 
+    @torch.no_grad()
+    def update_after_step(self, parts=None):
+        """Depth routing: nudge each routed block's threshold so about depth_capacity of tokens fire."""
+        c = self.cfg
+        for b in self.blocks:
+            if b.router is not None:
+                b.depth_bias += c.depth_step * (c.depth_capacity - b.wanted) / c.depth_capacity
+
+    def depth_stats(self):
+        fired = [b.fired.item() for b in self.blocks if b.router is not None]
+        return f" | depth routing: {min(fired):.0%}-{max(fired):.0%} of tokens processed" if fired else ""
+
     def scalar_params(self):
         return [p for p in self.parameters() if p.dim() < 2]
 
@@ -335,6 +400,9 @@ class GPT(nn.Module):
         """Training FLOPs per token: 6 x matmul params (incl. the LM head) + causal attention."""
         c = self.cfg
         matmul = sum(p.numel() for p in self.matrix_params()) + c.vocab_size * c.d_model
+        for b in self.blocks:  # a routed block only computes on its share of the tokens
+            if b.router is not None:
+                matmul -= (1 - c.depth_capacity) * sum(p.numel() for p in b.parameters() if p.dim() == 2)
         keys = c.seq_len  # keys each query attends to
         if c.attn_mode != "full":
             keys = c.window + c.concept_block
