@@ -159,6 +159,33 @@ def memory_group(vocab):
     }
 
 
+def memory2_group(vocab):
+    """Phase 2 memory: position-free concepts (fixes the breakdown past the training length) and 16k context,
+    where full attention gets expensive. 8 plain blocks, 300M tokens each; score with long_context.py."""
+    v = vocab[2:]
+    base = f"--vocab {vocab} --preset small --value_residual 1 --unet 1 --fp8 1 --n_kv_head 2 --n_layer 8 --tokens 3e8"
+    concept = "--attn_mode concept --window 512 --concept_block 64 --concept_topk 4 --concept_rope 0"
+    return {
+        f"m{v}_concept_nopos_fast": f"{base} --seq_len 4096 {concept} --fast_heads 2",
+        f"m16_full": f"{base} --seq_len 16384",
+        f"m16_window": f"{base} --seq_len 16384 --attn_mode window --window 512",
+        f"m16_concept_nopos": f"{base} --seq_len 16384 {concept}",
+        f"m16_concept_nopos_fast": f"{base} --seq_len 16384 {concept} --fast_heads 2",
+    }
+
+
+def scale_group(vocab):
+    """Phase 2 scale: does what helped small models pay off at ~230M parameters (16 x 1024)? 1.5B tokens each."""
+    common = "--preset medium --value_residual 1 --unet 1 --fp8 1 --n_kv_head 2 --tokens 1.5e9"
+    bank = ("--arch brain --n_layer 16 --memory_sub 0 --critic 0 --draft_weight 0 --n_shared 1 --n_modules 33 "
+            "--module_mode routed_attn --revive 0.1 --capacity 2.0")
+    return {
+        "s_med_plain": f"--vocab {vocab} {common}",
+        "s_med_brain": f"--vocab {vocab} {common} {bank}",
+        "s_med_plain_ec64k": f"--vocab ec64k {common}",
+    }
+
+
 def run_dir(name):
     return os.path.join(HERE, "runs", f"sweep_{name}")
 
