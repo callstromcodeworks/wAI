@@ -131,3 +131,11 @@ Recall vs working memory at equal key budget (100M, 4k): window 256 + 8 recalled
 **16:05 UTC. Owner's note on neurogenesis:** promising as a long-running "continued training" mechanism:
 few new modules relative to the whole, base frozen (neurons don't change function), new ones integrating
 with replay. Owner is considering next steps; nothing started on it.
+
+**16:45 UTC. Continual neurogenesis (owner's 5-part design), 1B 32-bank, 6 new modules, ~750 steps, 25% replay:**
+A one-shot spread fresh: learned 0.063, English +0.0027, code +0.0045 | B staged + consolidation, spread,
+fresh: 0.046, +0.0008, +0.0026 | C staged, placement by need, fresh: 0.039, +0.0009, +0.0018 | D staged, by
+need, copied features: 0.077, +0.0013, +0.0036. Copied features double learning at tiny forgetting (D vs C);
+D beats one-shot on both learning and English forgetting; staging + consolidation trades learning for less
+forgetting; gradient placement chose block 4 every time and did slightly worse than spreading. Next: E =
+staged, spread, copied features.
