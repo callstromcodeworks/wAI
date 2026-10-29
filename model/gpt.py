@@ -74,6 +74,10 @@ class GPTConfig:
     depth_step: float = 0.2      # threshold control gain (0.05 let blocks go silent for 100+ steps)
     depth_mode: str = "block"    # "block": routed tokens skip the whole block; "mlp": every token gets
                                  # attention (context), only routed tokens get the MLP (the heavy part)
+    # spiking MLP neurons (AMN-style, made trainable): each neuron leaks and integrates its input over the
+    # last spike_window tokens and fires a binary spike when it crosses a learned threshold
+    mlp_mode: str = "relu2"      # "relu2" | "spiking"
+    spike_window: int = 8
 
     def __post_init__(self):
         self.n_kv_head = self.n_kv_head or self.n_head
@@ -82,6 +86,7 @@ class GPTConfig:
         assert not self.depth_every or (self.attn_mode == "full" and self.kv_share == 1 and not self.mla_rank
                                          and not self.fast_heads), "depth routing needs plain full attention"
         assert self.depth_mode in ("block", "mlp")
+        assert self.mlp_mode in ("relu2", "spiking")
         assert self.attn_mode == "full" or (not self.mla_rank and self.window % self.concept_block == 0)
         if self.mla_rank:
             assert self.kv_share == 1 and self.n_kv_head == self.n_head, "MLA replaces GQA and K/V sharing"
@@ -229,13 +234,43 @@ class MLP(nn.Module):
         return self.proj(F.relu(self.fc(x)).square())
 
 
+class SpikingMLP(nn.Module):
+    """MLP whose hidden neurons spike. Each neuron's membrane potential is its input leaked over the last
+    spike_window tokens, v_t = sum_k decay^k u_(t-k) (a causal depthwise convolution, so it runs in
+    parallel), and it fires 1 when v_t crosses its learned threshold, else 0: the next layer sees only
+    binary signal / no-signal. Training uses a surrogate gradient (the forward pass is the hard step, the
+    backward pass a sigmoid's slope). Decay and threshold are learned per neuron."""
+
+    def __init__(self, cfg):
+        super().__init__()
+        H = cfg.mlp_ratio * cfg.d_model
+        self.K = cfg.spike_window
+        self.fc = nn.Linear(cfg.d_model, H, bias=False)
+        self.proj = nn.Linear(H, cfg.d_model, bias=False)
+        self.decay = nn.Parameter(torch.zeros(H))           # sigmoid(0) = 0.5: half the potential carries over per token
+        self.threshold = nn.Parameter(torch.full((H,), 0.5))
+        self.register_buffer("rate", torch.zeros(()))        # share of neurons firing, for the log
+
+    def forward(self, x):
+        u = self.fc(x).float()                                # [B, T, H]
+        H, K = u.size(-1), self.K
+        lam = torch.sigmoid(self.decay)
+        kernel = lam[:, None] ** torch.arange(K - 1, -1, -1, device=x.device, dtype=torch.float32)[None, :]
+        v = F.conv1d(F.pad(u.transpose(1, 2), (K - 1, 0)), kernel[:, None, :], groups=H).transpose(1, 2)
+        soft = torch.sigmoid(4.0 * (v - self.threshold))
+        hard = (v > self.threshold).float()
+        spikes = hard + soft - soft.detach()                 # forward: 0/1; backward: d soft
+        self.rate.copy_(hard.mean().detach())
+        return self.proj(spikes.to(x.dtype))
+
+
 class Block(nn.Module):
     def __init__(self, cfg, layer):
         super().__init__()
         self.cfg = cfg
         self.attn = Attention(cfg, layer)
         self.fast = FastWeights(cfg) if cfg.fast_heads else None
-        self.mlp = MLP(cfg)
+        self.mlp = SpikingMLP(cfg) if cfg.mlp_mode == "spiking" else MLP(cfg)
         self.router = None
         if cfg.depth_every and layer > 0 and layer % cfg.depth_every == cfg.depth_every - 1:
             self.router = nn.Linear(cfg.d_model, 1, bias=False)
@@ -385,7 +420,11 @@ class GPT(nn.Module):
 
     def depth_stats(self):
         fired = [b.fired.item() for b in self.blocks if b.router is not None]
-        return f" | depth routing: {min(fired):.0%}-{max(fired):.0%} of tokens processed" if fired else ""
+        out = f" | depth routing: {min(fired):.0%}-{max(fired):.0%} of tokens processed" if fired else ""
+        rates = [b.mlp.rate.item() for b in self.blocks if isinstance(b.mlp, SpikingMLP)]
+        if rates:
+            out += f" | neurons firing {min(rates):.1%}-{max(rates):.1%}"
+        return out
 
     def scalar_params(self):
         return [p for p in self.parameters() if p.dim() < 2]
