@@ -112,3 +112,8 @@ forgetting: new modules attach at one depth only. Follow-up (not this session): 
 Multi-depth growth (2 new modules after blocks 1, 3, 5, 7; same 14.7M params; replay 25%, lr 0.006): learned
 0.058 vs 0.052 single-depth, forgetting +0.0020 / +0.0038. Small gain; the module width (256) is the likelier
 limit. Recipe that works: grow new modules, train them with replay, keep the base frozen.
+
+**14:10 UTC. Same-hardware baselines (H200, 100M):** plain8 1.1447 / 1.1408 (mean 1.1428) vs 32-bank c2.0
+1.1417, 64-bank 1.1415: level at 100M (the earlier -0.007 was home-vs-H200 hardware). The bank's advantage
+appears only with longer training (1B: plain 0.9341, 32-bank 0.9296, bank3 0.927). Queue on schedule:
+s_med_plain 53%, s_med_brain 45%, s_med_plain_ec64k 28%, c_med_combo 20%; disk 59/100 GB.
