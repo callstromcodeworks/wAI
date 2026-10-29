@@ -65,6 +65,8 @@ def queues():
     pick = lambda names: {n: brain[n] for n in names}
     return {
         "memory": sweep.memory_group("ec32k"),
+        "memory2": sweep.memory2_group("ec32k"),
+        "scale": sweep.scale_group("ec32k"),
         "critic1b": pick([f"b32k_{m}_t1b_s{s}" for s in (7, 13) for m in ("bank3", "critic3")]),
         "bigbank": pick(["b32k_sparseB16_t100m", "b32k_sparseB16_t100m_s7", "b32k_sparseB32_t100m",
                          "b32k_sparseB32_t100m_s7", "b32k_sparseB8r_t100m"]),
@@ -277,7 +279,8 @@ def cmd_status(a):
 
 
 def cmd_eval(a):
-    mem = [os.path.join(run_dir(n), "ckpt.pt") for n in queues()["memory"] if run_state(n) == "done"]
+    q = queues()
+    mem = [os.path.join(run_dir(n), "ckpt.pt") for n in list(q["memory"]) + list(q["memory2"]) if run_state(n) == "done"]
     if mem:
         with open(os.path.join(RUNS, "long_context.txt"), "w") as f:
             r = subprocess.run([PY, os.path.join(MODEL, "long_context.py"), *mem, "--length", "8192", "--docs", "40"],
