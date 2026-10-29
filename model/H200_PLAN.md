@@ -141,3 +141,6 @@ forgetting; gradient placement chose block 4 every time and did slightly worse t
 staged, spread, copied features.
 E staged, spread (blocks 1, 3, 5), copied features: learned 0.080, English +0.0011, code +0.0030: best on both.
 Next: F = 6 stages x 1 module (smaller, more frequent additions), same total.
+F 6 stages x 1 module (100 + 25 steps each): learned 0.064, +0.0015, +0.0041: worse than E's 3 x 2. Stages too
+small to integrate; gains stop after ~4. Sweet spot: a few modules per stage, enough steps to mature them.
+Next: E with twice the steps per stage.
