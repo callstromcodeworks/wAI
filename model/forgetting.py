@@ -247,6 +247,143 @@ def lost_at(curve, target):
     return None
 
 
+def continual(a):
+    """Continued training by neurogenesis (the owner's design, 5 parts):
+    1. small, frequent additions: the new material arrives in --stages parts; each grows --per_stage modules;
+    2. placement by need (--placement need): new modules go after the block where the new material's loss
+       gradient on the residual stream is largest (fixed: spread over blocks 1, 3, 5, ...);
+    3. 'do what the neighbours do' (--init copy): a new module starts as a copy of an existing (frozen) bank
+       module's internals with its output projection at zero: silent, but with learned features;
+    4. consolidation: after each stage, --consolidate_steps of replay only (half general text, half the new
+       material seen so far) at a third of the learning rate, like sleep;
+    5. each stage's modules are named, separate parts (grown_at keys "depth_stage") that can be removed.
+    The base and earlier stages stay frozen: only the current stage's modules (and their gates) learn.
+    --stages 1 --placement fixed is the one-shot baseline (per_stage modules spread over blocks 1, 3, 5)."""
+    from brain import ModuleBank
+    torch.manual_seed(a.seed)
+    torch.backends.cuda.matmul.allow_tf32 = True
+    model, ck = load_model(a.ckpt)
+    cfg, vocab = model.cfg, ck["args"]["vocab"]
+    for p in model.parameters():
+        p.requires_grad_(False)
+    model.grown_at, model.grown_gates = nn.ModuleDict(), nn.ModuleDict()
+    ids_train = np.load(os.path.join(HERE, "data", vocab, "crawl", "train.npy"))
+    stages = np.array_split(ids_train, a.stages)
+    docs_val = rows_from(np.load(os.path.join(HERE, "data", vocab, "crawl", "val.npy")), 10 ** 9)
+    keep = {src: rows_from(load_shard(os.path.join(HERE, "data", vocab, src, "val_000000.bin"))[0], a.keep_tokens // T)
+            for src in ("fineweb-edu", "code")}
+    general = [load_shard(os.path.join(HERE, "data", vocab, src, "train_000000.bin"))[0]
+               for src in ("fineweb-edu", "code")]
+    token_bytes = torch.from_numpy(token_byte_lengths(VOCABS[vocab], model.cfg.vocab_size)).cuda()
+    rng = np.random.default_rng(a.seed)
+
+    def evaluate(tag):
+        r = dict(tag=tag, docs=score(model, docs_val, token_bytes),
+                 **{k: score(model, v, token_bytes) for k, v in keep.items()})
+        print(f"{tag:24s} | docs {r['docs']:.4f} | english {r['fineweb-edu']:.4f} | code {r['code']:.4f}", flush=True)
+        return r
+
+    def window(src):
+        st = rng.integers(0, len(src) - T - 1)
+        return src[st:st + T + 1]
+
+    def batch(new_sources, new_share):
+        rows = []
+        for _ in range(a.batch):
+            if rng.random() < new_share:
+                rows.append(window(new_sources[rng.integers(len(new_sources))]))
+            else:
+                rows.append(window(general[0] if rng.random() < 0.6 else general[1]))
+        return torch.from_numpy(np.stack(rows).astype(np.int64)).cuda()
+
+    def train(params, steps, new_sources, new_share, lr):
+        opt = torch.optim.AdamW(params, lr=lr, betas=(0.8, 0.95), eps=1e-10)
+        model.train()
+        for step in range(1, steps + 1):
+            for g in opt.param_groups:
+                g["lr"] = lr * min(1.0, step / 10)
+            for _ in range(a.accum):
+                r = batch(new_sources, new_share)
+                with torch.autocast("cuda", torch.bfloat16), sdpa_kernel(SDPA_BACKENDS, set_priority=True):
+                    out = model(r[:, :-1])
+                loss = model.train_loss(out, r[:, 1:], draft_weight=0.0, critic_weight=0.0, balance_weight=0.0)[0]
+                (loss / a.accum).backward()
+            opt.step()
+            model.zero_grad(set_to_none=True)
+
+    def neediest_depth(src):
+        """Block whose output most needs to change for the new material: mean gradient norm on the stream."""
+        outs = []
+
+        def keep_grad(m, i, o):
+            o.retain_grad()
+            outs.append(o)
+
+        hooks = [b.register_forward_hook(keep_grad) for b in model.blocks]
+        model.wte.weight.requires_grad_(True)
+        r = torch.from_numpy(np.stack([window(src) for _ in range(a.batch)]).astype(np.int64)).cuda()
+        model.train()
+        with torch.autocast("cuda", torch.bfloat16), sdpa_kernel(SDPA_BACKENDS, set_priority=True):
+            out = model(r[:, :-1])
+        model.train_loss(out, r[:, 1:], draft_weight=0.0, critic_weight=0.0, balance_weight=0.0)[0].backward()
+        for h in hooks:
+            h.remove()
+        model.wte.weight.requires_grad_(False)
+        need = [o.grad.float().norm(dim=-1).mean().item() for o in outs[:len(model.blocks)]]
+        model.zero_grad(set_to_none=True)
+        cands = list(range(1, len(model.blocks) - 1))
+        return max(cands, key=lambda i: need[i]), need
+
+    def add_modules(depth, stage, k):
+        key = f"{depth}_{stage}"
+        with torch.device("cuda"):
+            bank, gate = ModuleBank(cfg, k, attention=True), nn.Linear(cfg.d_model, k)
+        bank.reset_parameters()  # output projection at zero: silent at first
+        with torch.no_grad():
+            nn.init.normal_(gate.weight, std=0.02)
+            nn.init.zeros_(gate.bias)
+            if a.init == "copy":  # internals copied from existing modules: start with their learned features
+                src, de = model.bank, cfg.module_dim
+                for j, i in enumerate(rng.choice(src.E, size=k, replace=False)):
+                    bank.w_in[j * de:(j + 1) * de] = src.w_in[i * de:(i + 1) * de]
+                    for pl_new, pl_src in ((bank.qkv, src.qkv), (bank.proj, src.proj), (bank.fc, src.fc),
+                                           (bank.fc2, src.fc2)):
+                        for t_new, t_src in zip(pl_new, pl_src):
+                            t_new[j] = t_src[i]
+        model.grown_at[key], model.grown_gates[key] = bank, gate
+        return list(bank.parameters()) + list(gate.parameters()), key
+
+    curve = [evaluate("start")]
+    fixed = list(range(1, len(model.blocks) - 1, 2))
+    seen, layout = [], []
+    for st in range(a.stages):
+        new = stages[st]
+        seen.append(new)
+        if a.stages == 1 and a.placement == "fixed":  # one-shot: per_stage modules spread over 3 depths
+            params, keys = [], []
+            for d in fixed[:3]:
+                p_, k_ = add_modules(d, 0, a.per_stage // 3)
+                params += p_
+                keys.append(k_)
+        else:
+            depth = neediest_depth(new)[0] if a.placement == "need" else fixed[st % len(fixed)]
+            params, key = add_modules(depth, st, a.per_stage)
+            keys = [key]
+        for p in params:
+            p.requires_grad_(True)
+        layout.append(keys)
+        train(params, a.stage_steps, [new], 1.0 - a.replay, a.lr_adam)
+        if a.consolidate_steps:  # sleep: replay only, the new material seen so far mixed with general text
+            train(params, a.consolidate_steps, seen, 0.5, a.lr_adam / 3)
+        for p in params:
+            p.requires_grad_(False)  # matured: this stage's modules stop changing
+        curve.append(evaluate(f"stage {st + 1} ({','.join(keys)})"))
+    res = dict(name=a.name, ckpt=a.ckpt, mode="continual", stages=a.stages, per_stage=a.per_stage,
+               placement=a.placement, init=a.init, consolidate_steps=a.consolidate_steps, layout=layout, curve=curve)
+    os.makedirs(OUT_DIR, exist_ok=True)
+    json.dump(res, open(os.path.join(OUT_DIR, f"continual_{a.name}.json"), "w"), indent=1)
+
+
 def summary():
     """Forgetting grows faster than learning, so a run that learned little looks good per unit
     learned; the fair comparison is the loss at the same amount learned (the smallest any run
@@ -268,7 +405,13 @@ def summary():
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["prepare", "run", "summary"])
+    ap.add_argument("command", choices=["prepare", "run", "summary", "continual"])
+    ap.add_argument("--stages", type=int, default=3, help="continual: parts the new material arrives in")
+    ap.add_argument("--per_stage", type=int, default=2, help="continual: new modules grown per stage")
+    ap.add_argument("--stage_steps", type=int, default=200, help="continual: training steps per stage")
+    ap.add_argument("--consolidate_steps", type=int, default=50, help="continual: replay-only steps after each stage")
+    ap.add_argument("--placement", default="need", choices=["need", "fixed"], help="continual: where new modules go")
+    ap.add_argument("--init", default="copy", choices=["copy", "fresh"], help="continual: new module internals")
     ap.add_argument("ckpt", nargs="?")
     ap.add_argument("--train", default="all")
     ap.add_argument("--docs", default=None, help="prepare: JSONL file of documents ({\"text\": ...} per line)")
@@ -292,6 +435,8 @@ def main():
         a.name = a.name or (f"{os.path.basename(os.path.dirname(a.ckpt))}_{a.train.replace(':', '').replace(',', '-')}"
                             + (f"_replay{round(a.replay * 100)}" if a.replay else ""))
         run(a)
+    elif a.command == "continual":
+        continual(a)
     else:
         summary()
 
