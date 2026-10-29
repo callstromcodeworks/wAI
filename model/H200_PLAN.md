@@ -95,3 +95,11 @@ combo at medium size (1.5B) and at 1B, with full-attention references.
 (English -0.08 vs -0.20); updating only existing modules still forgets ~2x more; replay still best.
 Next: neurogenesis (forgetting.py --train grow:K): add K fresh routed modules, freeze the old ones (and
 their router rows), let revival bring the new ones in; growing starts output-identical to the old model.
+
+**12:40 UTC. Neurogenesis + replay: the least forgetting measured.** 1B 32-module bank fine-tuned on docs
+(300 steps): add 8 new modules (separate gated bank, old model frozen) + 25% replay: English lost +0.0016,
+code +0.0027 (vs +0.019 / +0.023 for all weights + replay), lost at equal learning 0.0021 (best of all;
+all+replay 0.0027, all 0.0038). Without replay new modules alone forget a lot (0.0126). Learns less in 300
+steps (0.039 vs 0.154 bpb on docs; 14.7M trainable). Brain analogue: new neurons for new material plus
+replay of old (sleep). A safe way to teach the agent new facts: grow modules, train with replay.
+Rental credit at 12:35 UTC: $70.42 ($0 at ~06:05 UTC Oct 30). Combo runs cut to 600M tokens to fit.
