@@ -332,7 +332,51 @@ def continual(a):
         need = [o.grad.float().norm(dim=-1).mean().item() for o in outs[:len(model.blocks)]]
         model.zero_grad(set_to_none=True)
         cands = list(range(1, len(model.blocks) - 1))
+        crowd = {i: sum(k.split("_")[0] == str(i) for k in model.grown_at) for i in cands}
+        if a.placement == "need_spread":  # a niche that already holds new modules is less attractive
+            return max(cands, key=lambda i: need[i] / (1 + crowd[i])), need
         return max(cands, key=lambda i: need[i]), need
+
+    def active_modules(src):
+        """How often each routed bank module fires on the new material."""
+        r = torch.from_numpy(np.stack([window(src) for _ in range(a.batch)]).astype(np.int64)).cuda()
+        model.train()
+        with torch.no_grad(), torch.autocast("cuda", torch.bfloat16), sdpa_kernel(SDPA_BACKENDS, set_priority=True):
+            usage = model(r[:, :-1])[4]
+        u = usage.float().cpu().numpy()
+        return u[len(u) - model.bank.E:]
+
+    def silence(key, js, on=True):
+        """Gate bias far negative: modules js of part key contribute nothing (removal, or pruning)."""
+        g = model.grown_gates[key]
+        with torch.no_grad():
+            for j in js:
+                if on:
+                    saved[(key, j)] = g.bias[j].item()
+                    g.bias[j] = -30.0
+                else:
+                    g.bias[j] = saved.pop((key, j))
+
+    def new_loss(src, n=4):
+        rr = np.random.default_rng(0)  # same windows each call, so ablations compare like with like
+        rows = np.stack([src[st:st + T + 1] for st in rr.integers(0, len(src) - T - 1, n * a.batch)])
+        return score(model, rows.astype(np.int64), token_bytes)
+
+    def prune(key, k_keep, src):
+        """Survival by usefulness: keep the k_keep modules whose removal hurts the new material most."""
+        k = model.grown_gates[key].out_features
+        base, harm = new_loss(src), []
+        for j in range(k):
+            silence(key, [j])
+            harm.append(new_loss(src) - base)
+            silence(key, [j], on=False)
+        dead = [int(j) for j in np.argsort(harm)[:k - k_keep]]
+        silence(key, dead)
+        for j in dead:
+            saved.pop((key, j))  # permanent
+        return [round(h, 5) for h in harm], dead
+
+    saved = {}
 
     def add_modules(depth, stage, k):
         key = f"{depth}_{stage}"
@@ -342,9 +386,14 @@ def continual(a):
         with torch.no_grad():
             nn.init.normal_(gate.weight, std=0.02)
             nn.init.zeros_(gate.bias)
-            if a.init == "copy":  # internals copied from existing modules: start with their learned features
+            if a.init in ("copy", "copy_active"):  # internals copied from existing modules: their features
                 src, de = model.bank, cfg.module_dim
-                for j, i in enumerate(rng.choice(src.E, size=k, replace=False)):
+                if a.init == "copy_active":  # the modules the new material uses most (repeats allowed)
+                    u = active_modules(new)
+                    picks = [int(i) for i in np.argsort(-u)[:k]] if k <= src.E else                         [int(i) for i in np.argsort(-u)[np.arange(k) % src.E]]
+                else:
+                    picks = rng.choice(src.E, size=k, replace=k > src.E)
+                for j, i in enumerate(picks):
                     bank.w_in[j * de:(j + 1) * de] = src.w_in[i * de:(i + 1) * de]
                     for pl_new, pl_src in ((bank.qkv, src.qkv), (bank.proj, src.proj), (bank.fc, src.fc),
                                            (bank.fc2, src.fc2)):
@@ -354,8 +403,8 @@ def continual(a):
         return list(bank.parameters()) + list(gate.parameters()), key
 
     curve = [evaluate("start")]
-    fixed = list(range(1, len(model.blocks) - 1, 2))
-    seen, layout = [], []
+    fixed = [int(d) for d in a.depths.split(",")] if a.depths else list(range(1, len(model.blocks) - 1, 2))
+    seen, layout, pruned = [], [], []
     for st in range(a.stages):
         new = stages[st]
         seen.append(new)
@@ -366,20 +415,33 @@ def continual(a):
                 params += p_
                 keys.append(k_)
         else:
-            depth = neediest_depth(new)[0] if a.placement == "need" else fixed[st % len(fixed)]
-            params, key = add_modules(depth, st, a.per_stage)
+            depth = neediest_depth(new)[0] if a.placement in ("need", "need_spread") else fixed[st % len(fixed)]
+            params, key = add_modules(depth, st, a.per_stage * a.overgrow)
             keys = [key]
         for p in params:
             p.requires_grad_(True)
         layout.append(keys)
         train(params, a.stage_steps, [new], 1.0 - a.replay, a.lr_adam)
+        if a.overgrow > 1:  # most new neurons die; the ones that proved useful survive
+            pruned.append(prune(keys[0], a.per_stage, new))
+            print(f"  pruned {keys[0]}: harm {pruned[-1][0]} -> silenced {pruned[-1][1]}", flush=True)
         if a.consolidate_steps:  # sleep: replay only, the new material seen so far mixed with general text
             train(params, a.consolidate_steps, seen, 0.5, a.lr_adam / 3)
         for p in params:
             p.requires_grad_(False)  # matured: this stage's modules stop changing
         curve.append(evaluate(f"stage {st + 1} ({','.join(keys)})"))
+    audit = []  # each part is removable: silence it and see what it held
+    for keys in layout:
+        for key in keys:
+            silence(key, range(model.grown_gates[key].out_features))
+        audit.append(evaluate(f"without {','.join(keys)}"))
+        for key in keys:
+            for j in range(model.grown_gates[key].out_features):
+                if (key, j) in saved:
+                    silence(key, [j], on=False)
     res = dict(name=a.name, ckpt=a.ckpt, mode="continual", stages=a.stages, per_stage=a.per_stage,
-               placement=a.placement, init=a.init, consolidate_steps=a.consolidate_steps, layout=layout, curve=curve)
+               placement=a.placement, init=a.init, consolidate_steps=a.consolidate_steps, overgrow=a.overgrow,
+               stage_steps=a.stage_steps, layout=layout, curve=curve, pruned=pruned, audit=audit)
     os.makedirs(OUT_DIR, exist_ok=True)
     json.dump(res, open(os.path.join(OUT_DIR, f"continual_{a.name}.json"), "w"), indent=1)
 
@@ -410,8 +472,12 @@ def main():
     ap.add_argument("--per_stage", type=int, default=2, help="continual: new modules grown per stage")
     ap.add_argument("--stage_steps", type=int, default=200, help="continual: training steps per stage")
     ap.add_argument("--consolidate_steps", type=int, default=50, help="continual: replay-only steps after each stage")
-    ap.add_argument("--placement", default="need", choices=["need", "fixed"], help="continual: where new modules go")
-    ap.add_argument("--init", default="copy", choices=["copy", "fresh"], help="continual: new module internals")
+    ap.add_argument("--placement", default="need", choices=["need", "need_spread", "fixed"],
+                    help="continual: where new modules go")
+    ap.add_argument("--init", default="copy", choices=["copy", "copy_active", "fresh"],
+                    help="continual: new module internals")
+    ap.add_argument("--depths", default="", help="continual, fixed placement: depths per stage (default 1,3,5,...)")
+    ap.add_argument("--overgrow", type=int, default=1, help="continual: grow this many times per_stage, keep the most useful")
     ap.add_argument("ckpt", nargs="?")
     ap.add_argument("--train", default="all")
     ap.add_argument("--docs", default=None, help="prepare: JSONL file of documents ({\"text\": ...} per line)")
