@@ -82,3 +82,9 @@ get rerun on the H200 (queue h200base). Phase 2 started 09:44 (scale first, 2 sl
 (capacity 2.0, revival) 0.9296, dense bank3 0.9269 / 0.9278. The module bank's edge grows with training
 (level at 100M, ~0.005-0.007 better at 1B): the first brain component that clearly beats plain on the
 same hardware. Phase 2 restarted at 4 parallel: scale (medium plain / brain / ec64k), h200base, memory2.
+
+**11:45 UTC. Position-free concepts fix the long-context breakdown** (local combo models, 100M tokens,
+trained at 4k, 20 + 20 docs at 8k): English 2-4k -> 4-8k 1.284 -> 1.300 (+1.2%), code 0.889 -> 0.931
+(+4.7%), vs phase 1's RoPE concepts +42% / +68% and full attention +2% / 0%. Combination (bank + concepts
++ fast weights) adds up: 1.1096 vs 1.1130 without the bank at 100M tokens. Phase 3 queued on the H200:
+combo at medium size (1.5B) and at 1B, with full-attention references.
