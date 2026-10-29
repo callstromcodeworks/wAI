@@ -48,6 +48,9 @@ class ConceptAttention(nn.Module):
         self.wb = cfg.window // cfg.concept_block  # previous blocks in the window
         self.topk = cfg.concept_topk if cfg.attn_mode == "concept" else 0
         self.concepts = cfg.attn_mode == "concept"
+        # kernel tiles no bigger than the sparse blocks: on Hopper FlexAttention defaults to 128-row query
+        # tiles, which a 64-token block can't hold
+        self.tiles = {"BLOCK_M": min(64, self.b), "BLOCK_N": min(64, self.b)}
         H, Hkv, D = cfg.n_head, cfg.n_kv_head, cfg.head_dim
         if self.concepts:
             self.pool = nn.Parameter(torch.zeros(Hkv * D))  # pooling query per kv head (0 = mean to start); 1-D: AdamW
@@ -89,7 +92,8 @@ class ConceptAttention(nn.Module):
         nq = T // b
         gqa = Hkv != H
         if not self.concepts:
-            return _flex(q, k, v, block_mask=self.block_mask(B, T, q.device), scale=scale, enable_gqa=gqa)
+            return _flex(q, k, v, block_mask=self.block_mask(B, T, q.device), scale=scale, enable_gqa=gqa,
+                         kernel_options=self.tiles)
 
         # (2) concepts: pool each block's keys and values, attend to completed blocks (plus a null slot)
         kb, vb = k.view(B, Hkv, nq, b, D), v.view(B, Hkv, nq, b, D)
@@ -121,7 +125,8 @@ class ConceptAttention(nn.Module):
                 k_sel = min(self.topk, nq)
                 selected = score.topk(k_sel, dim=-1).indices                                # [B, nq, k]
                 n_valid = (qi - self.wb).clamp(0, k_sel)[None].expand(B, -1)
-        y_loc = _flex(q, k, v, block_mask=self.block_mask(B, T, q.device, selected, n_valid), scale=scale, enable_gqa=gqa)
+        y_loc = _flex(q, k, v, block_mask=self.block_mask(B, T, q.device, selected, n_valid), scale=scale, enable_gqa=gqa,
+                      kernel_options=self.tiles)
 
         g = torch.sigmoid(self.gate(x).float()).view(B, T, 2, H).permute(2, 0, 3, 1)[..., None]  # [2, B, H, T, 1]
         return (g[0] * y_loc.float() + g[1] * y_cmp.float()).to(q.dtype)
