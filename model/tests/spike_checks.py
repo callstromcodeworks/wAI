@@ -58,3 +58,18 @@ for step in range(3):
     muon.step(); adam.step(); m.zero_grad(set_to_none=True)
 ok(torch.isfinite(loss).item() and "neurons firing" in m.depth_stats(), "compiled training + firing-rate log",
    m.depth_stats().strip())
+
+# 4. rate coding: whole spike counts 0..levels per token, same surrogate training
+cfg3 = GPTConfig(n_ranks=32763, seq_len=T, n_layer=2, n_head=4, d_model=256, n_kv_head=2, mlp_mode="spiking",
+                 spike_window=1, spike_levels=3)
+with torch.device("cuda"):
+    m3 = GPT(cfg3)
+blk = m3.blocks[0].mlp
+with torch.no_grad():
+    x = torch.randn(2, T, 256, device="cuda")
+    v = blk.fc(x).float()
+    counts = torch.floor((v / (blk.threshold.abs() + 1e-3)).clamp(0, 3))
+    ref = blk.proj(counts)
+    err = (blk(x).float() - ref).abs().max().item()
+ok(err < 1e-3 and set(counts.unique().tolist()) <= {0.0, 1.0, 2.0, 3.0},
+   "rate coding: 0-3 whole spikes per neuron per token", f"max diff {err:.1e}, counts used {sorted(set(counts.unique().tolist()))}")

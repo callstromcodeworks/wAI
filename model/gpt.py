@@ -80,6 +80,7 @@ class GPTConfig:
     # last spike_window tokens and fires a binary spike when it crosses a learned threshold
     mlp_mode: str = "relu2"      # "relu2" | "spiking"
     spike_window: int = 8
+    spike_levels: int = 1        # spikes a neuron can fire per token (1 = binary; 3 = rate code, 2 bits)
 
     def __post_init__(self):
         self.n_kv_head = self.n_kv_head or self.n_head
@@ -252,6 +253,7 @@ class SpikingMLP(nn.Module):
         super().__init__()
         H = cfg.mlp_ratio * cfg.d_model
         self.K = cfg.spike_window
+        self.levels = cfg.spike_levels
         self.fc = nn.Linear(cfg.d_model, H, bias=False)
         self.proj = nn.Linear(H, cfg.d_model, bias=False)
         self.decay = nn.Parameter(torch.zeros(H))           # sigmoid(0) = 0.5: half the potential carries over per token
@@ -264,10 +266,15 @@ class SpikingMLP(nn.Module):
         lam = torch.sigmoid(self.decay)
         kernel = lam[:, None] ** torch.arange(K - 1, -1, -1, device=x.device, dtype=torch.float32)[None, :]
         v = F.conv1d(F.pad(u.transpose(1, 2), (K - 1, 0)), kernel[:, None, :], groups=H).transpose(1, 2)
-        soft = torch.sigmoid(4.0 * (v - self.threshold))
-        hard = (v > self.threshold).float()
-        spikes = hard + soft - soft.detach()                 # forward: 0/1; backward: d soft
-        self.rate.copy_(hard.mean().detach())
+        if self.levels == 1:
+            soft = torch.sigmoid(4.0 * (v - self.threshold))
+            hard = (v > self.threshold).float()
+        else:  # rate code: one spike per threshold crossed, up to `levels` per token
+            th = self.threshold.abs() + 1e-3
+            soft = (v / th).clamp(0, self.levels)
+            hard = torch.floor(soft)
+        spikes = hard + soft - soft.detach()                 # forward: whole spikes; backward: d soft
+        self.rate.copy_((hard > 0).float().mean().detach())
         return self.proj(spikes.to(x.dtype))
 
 

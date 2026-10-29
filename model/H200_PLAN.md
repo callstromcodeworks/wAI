@@ -64,3 +64,9 @@ positions. Then retrain at 16k.
 **08:00 UTC. Local spiking MLP** (8 blocks, 100M tokens): 1.1999 vs plain8 1.1490 (+4.4%), 82k vs 107k
 tok/s, 21-33% of neurons firing. Diagnosing: spike_window 1 (binary threshold, no integration) and
 mlp_ratio 8 (twice the neurons, as brains offset 1-bit spikes with numbers).
+
+**09:15 UTC.** Spiking diagnostics (local, 100M tokens): binary threshold, no integration 1.1891;
+integration window 8, mlp_ratio 8 (twice the neurons) 1.1886 at 45k tok/s. 1-bit spikes cost ~3.5-4.5%
+whatever the integration or neuron count; on a GPU they're slower, not faster. Next: rate coding
+(0-3 spikes per token, 2 bits), the brain's own answer to 1-bit spikes.
+H200: b32k_bank3_t1b_s7 done; first bigbank2 run done (13 min); ec64k shards ready.
