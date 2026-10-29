@@ -50,7 +50,9 @@ class ConceptAttention(nn.Module):
         self.concepts = cfg.attn_mode == "concept"
         # kernel tiles no bigger than the sparse blocks: on Hopper FlexAttention defaults to 128-row query
         # tiles, which a 64-token block can't hold
-        self.tiles = {"BLOCK_M": min(64, self.b), "BLOCK_N": min(64, self.b)}
+        t = min(64, self.b)
+        self.tiles = {"BLOCK_M": t, "BLOCK_N": t,
+                      "bwd_BLOCK_M1": t, "bwd_BLOCK_N1": t, "bwd_BLOCK_M2": t, "bwd_BLOCK_N2": t}
         H, Hkv, D = cfg.n_head, cfg.n_kv_head, cfg.head_dim
         if self.concepts:
             self.pool = nn.Parameter(torch.zeros(Hkv * D))  # pooling query per kv head (0 = mean to start); 1-D: AdamW

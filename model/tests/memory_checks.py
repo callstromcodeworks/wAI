@@ -10,6 +10,9 @@ from memory import ConceptAttention, FastWeights
 import train
 
 torch.manual_seed(0)
+# FlexAttention's Triton kernel multiplies fp32 in TF32 on Hopper (~1e-3 relative): 1e-2 still catches any
+# masking or selection error, which shows up as O(1) differences (training itself runs in bf16)
+TOL = 1e-2
 ok = lambda c, name, extra="": print(("PASS " if c else "FAIL ") + name + (f"  ({extra})" if extra else ""))
 T, b, W = 1024, 64, 256
 base = dict(n_ranks=32763, seq_len=T, n_layer=4, n_head=4, d_model=256, n_kv_head=2, window=W, concept_block=b)
@@ -30,7 +33,7 @@ with torch.device("cuda"):
 y = mw(q, k, v, x, scale)
 local = causal & (blk[None, :] >= blk[:, None] - W // b)
 ref = F.scaled_dot_product_attention(q, k, v, attn_mask=local, scale=scale, enable_gqa=True)
-ok((y - ref).abs().max().item() < 2e-3, "window = dense reference", f"max diff {(y - ref).abs().max().item():.1e}")
+ok((y - ref).abs().max().item() < TOL, "window = dense reference", f"max diff {(y - ref).abs().max().item():.1e}")
 
 # 2. concept mode = dense reference with the same pooling, selection and gates
 with torch.device("cuda"):
@@ -61,7 +64,7 @@ mask &= causal
 y_loc = F.scaled_dot_product_attention(q, k, v, attn_mask=mask[:, None], scale=scale, enable_gqa=True)
 g = torch.sigmoid(mc.gate(x)).view(B, T, 2, H).permute(2, 0, 3, 1)[..., None]
 ref = g[0] * y_loc + g[1] * y_cmp
-ok((y - ref).abs().max().item() < 2e-3, "concept = dense reference (pooling, selection, expansion, gates)",
+ok((y - ref).abs().max().item() < TOL, "concept = dense reference (pooling, selection, expansion, gates)",
    f"max diff {(y - ref).abs().max().item():.1e}")
 
 # 3. fast weights: chunked parallel form = step-by-step Hebbian recurrence
