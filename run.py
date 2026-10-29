@@ -68,6 +68,8 @@ def queues():
         "memory2": sweep.memory2_group("ec32k"),
         "scale": sweep.scale_group("ec32k"),
         "h200base": pick(["b32k_plain8_t100m", "b32k_plain8_t100m_s7"]),
+        "combo_med": {k: v for k, v in sweep.combo_group("ec32k").items() if k.startswith("c_med")},
+        "combo_small": {k: v for k, v in sweep.combo_group("ec32k").items() if not k.startswith("c_med")},
         "critic1b": pick([f"b32k_{m}_t1b_s{s}" for s in (7, 13) for m in ("bank3", "critic3")]),
         "bigbank": pick(["b32k_sparseB16_t100m", "b32k_sparseB16_t100m_s7", "b32k_sparseB32_t100m",
                          "b32k_sparseB32_t100m_s7", "b32k_sparseB8r_t100m"]),
@@ -281,7 +283,8 @@ def cmd_status(a):
 
 def cmd_eval(a):
     q = queues()
-    mem = [os.path.join(run_dir(n), "ckpt.pt") for n in list(q["memory"]) + list(q["memory2"]) if run_state(n) == "done"]
+    mem = [os.path.join(run_dir(n), "ckpt.pt") for n in list(q["memory"]) + list(q["memory2"]) + list(q["combo_small"])
+           + list(q["combo_med"]) if run_state(n) == "done"]
     if mem:
         with open(os.path.join(RUNS, "long_context.txt"), "w") as f:
             r = subprocess.run([PY, os.path.join(MODEL, "long_context.py"), *mem, "--length", "8192", "--docs", "40"],

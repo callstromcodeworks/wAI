@@ -22,6 +22,7 @@ import torch
 from torch.nn.attention import sdpa_kernel
 
 import safe_checkpoint
+from brain import BrainConfig, BrainGPT
 from gpt import GPT, GPTConfig
 from prepare_data import load_shard
 from tokenizer import VOCABS
@@ -59,9 +60,10 @@ def reads_per_query(cfg, L):
 def evaluate(path, docs_by_source, length):
     if path.endswith(".pt"):  # a checkpoint made on this machine
         ck = torch.load(path, map_location="cpu", weights_only=False)
-        cfg = GPTConfig(**{**ck["config"], "seq_len": length})  # RoPE tables for the evaluation length
+        is_brain = ck["config"].get("arch") == "brain"
+        cfg = (BrainConfig if is_brain else GPTConfig)(**{**ck["config"], "seq_len": length})  # RoPE for the eval length
         with torch.device("cuda"):
-            model = GPT(cfg)
+            model = BrainGPT(cfg) if is_brain else GPT(cfg)
         model.load_state_dict(ck["model"])
     else:  # an exported run (safetensors + JSON): nothing is unpickled, safe for runs from elsewhere
         model, ck = safe_checkpoint.load_model(path, seq_len=length)
@@ -71,7 +73,7 @@ def evaluate(path, docs_by_source, length):
     token_bytes = torch.from_numpy(token_byte_lengths(VOCABS[vocab], cfg.vocab_size)).cuda()
     run = path if os.path.isdir(path) else os.path.dirname(path)
     res = {"run": os.path.basename(os.path.normpath(run)), "train_len": ck["config"]["seq_len"],
-           "attn_mode": cfg.attn_mode, "fast_heads": cfg.fast_heads}
+           "attn_mode": cfg.attn_mode, "fast_heads": cfg.fast_heads, "arch": getattr(cfg, "arch", "gpt")}
     res["keys_per_query"], res["gpu_keys"] = reads_per_query(cfg, length)
     for source, docs in docs_by_source.items():
         loss_b, bytes_b = np.zeros(len(BUCKETS)), np.zeros(len(BUCKETS))
