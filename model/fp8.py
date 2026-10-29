@@ -28,9 +28,23 @@ def _quantize(x, dtype, maxval):
     return (x.float() * scale).clamp(-maxval, maxval).to(dtype), scale.reciprocal()
 
 
+@torch.library.custom_op("worksai::row_major", mutates_args=())
+def row_major(t: torch.Tensor) -> torch.Tensor:
+    """A row-major copy, made where torch.compile can't optimise it away. Inductor sometimes drops a plain
+    .contiguous() before _scaled_mm (torch 2.15 at every shape; 2.14 at some, e.g. 1024 x 6144), feeding it
+    a transposed layout: NaN gradients or a compile error. Its fake (shape) function declares the output
+    row-major, so the compiler knows the real layout and keeps _scaled_mm itself compiled."""
+    return t.contiguous().clone()
+
+
+@row_major.register_fake
+def _(t):
+    return torch.empty(t.shape, dtype=t.dtype, device=t.device)
+
+
 def _col_major(t):
     """Same values, column-major layout (what _scaled_mm wants for its second operand)."""
-    return t.t().contiguous().t()
+    return row_major(t.t()).t()
 
 
 @torch.library.custom_op("worksai::fp8_mm", mutates_args=())
@@ -65,7 +79,7 @@ class _FP8Linear(torch.autograd.Function):
         if _SAFE_DW:  # dW = dy^T @ x through the opaque op (see fp8_mm)
             dw = fp8_mm(g8.t(), x8.t(), sg, sx, True)
         else:
-            dw = torch._scaled_mm(g8.t().contiguous(), _col_major(x8), scale_a=sg, scale_b=sx, out_dtype=torch.float32)
+            dw = torch._scaled_mm(row_major(g8.t()), _col_major(x8), scale_a=sg, scale_b=sx, out_dtype=torch.float32)
         return dx, dw.to(ctx.w_dtype)
 
 
@@ -81,16 +95,21 @@ def _direct_dw_compiles_correctly():
     global _SAFE_DW
     _SAFE_DW = False
     torch.manual_seed(0)
-    x = torch.randn(256, 128, device="cuda", dtype=torch.bfloat16)
-    w = torch.randn(256, 128, device="cuda") * 0.05
-    grads = []
-    for fn in (fp8_linear, torch.compile(fp8_linear)):
-        xr, wr = x.clone().requires_grad_(True), w.clone().requires_grad_(True)
-        fn(xr, wr).float().pow(2).sum().backward()
-        grads.append(wr.grad)
-    eager, compiled = grads
-    ok = bool(torch.isfinite(compiled).all()) and (compiled - eager).norm() <= 1e-2 * eager.norm()
-    return ok
+    for n_in, n_out in ((128, 256), (1024, 6144)):  # a small shape and one that broke 2.14 before row_major
+        x = torch.randn(512, n_in, device="cuda", dtype=torch.bfloat16)
+        w = torch.randn(n_out, n_in, device="cuda") * 0.05
+        grads = []
+        for fn in (fp8_linear, torch.compile(fp8_linear, dynamic=False)):
+            xr, wr = x.clone().requires_grad_(True), w.clone().requires_grad_(True)
+            try:
+                fn(xr, wr).float().pow(2).sum().backward()
+            except Exception:  # a compile-time layout error counts as miscompiling
+                return False
+            grads.append(wr.grad)
+        eager, compiled = grads
+        if not (bool(torch.isfinite(compiled).all()) and (compiled - eager).norm() <= 1e-2 * eager.norm()):
+            return False
+    return True
 
 
 def enable(model):
