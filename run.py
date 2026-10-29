@@ -91,13 +91,18 @@ def run_state(name):
 
 def cmd_setup(a):
     ok = True
-    for mod in ("torch", "numpy", "pyarrow", "huggingface_hub", "triton"):
+    missing = []
+    for mod in ("torch", "numpy", "pyarrow", "huggingface_hub", "triton", "tiktoken"):
         try:
             m = importlib.import_module(mod)
             say(f"  {mod} {getattr(m, '__version__', '')}")
         except ImportError:
-            say(f"  MISSING {mod}: pip install -r requirements.txt")
-            ok = False
+            missing.append(mod.replace("_", "-"))
+    if missing:
+        ngc = os.path.exists("/etc/pip/constraint.txt")  # NVIDIA's NGC containers pin their packages
+        say(f"  MISSING {', '.join(missing)}: pip install {' '.join(missing)}"
+            + ("  (NGC container: install just these, never torch/numpy)" if ngc else ""))
+        ok = False
     if not ok:
         return 1
     import torch

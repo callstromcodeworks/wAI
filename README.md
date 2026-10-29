@@ -20,9 +20,14 @@ between weight size and KV cache.
 This tree is the tokenizer and the model code only: no agent server, crawl cluster, keys or user
 data. `run.py` does everything:
 
+Recommended image: NVIDIA's NGC PyTorch container (`nvcr.io/nvidia/pytorch:26.09-py3` or newer; pick a
+host whose driver supports its CUDA version). Disk: 100 GB (the image is ~20 GB, data ~16 GB,
+checkpoints for the default queue ~17 GB).
+
 ```bash
-apt-get install -y cmake build-essential      # if the image lacks them
-pip install -r requirements.txt               # keep the image's torch if it's 2.8+
+git clone https://github.com/callstromcodeworks/wAI.git && cd wAI
+pip install pyarrow huggingface-hub tiktoken   # NGC: only these (torch/numpy are pinned there)
+# other images: apt-get install -y cmake build-essential && pip install -r requirements.txt
 python run.py setup                           # build fasttok, check GPU, packages, vocabulary hash
 python run.py data --download                 # or copy model/data/ec32k/ from home (8.3 GB)
 python run.py test                            # correctness suites, in parallel
@@ -31,7 +36,9 @@ python run.py status                          # from another shell, any time
 python run.py eval                            # long-context table + sweep summary
 ```
 
-`python run.py all` runs setup, data, test, train and eval in order. Training runs several
+`python run.py all` runs setup, data, test, train and eval in order. FP8 checks the torch build on first use:
+some builds (PyPI 2.15) miscompile one FP8 GEMM, and training then routes it through a safe op
+(it prints a line saying so; ~7% slower, correct). Training runs several
 experiments at once, each with an equal share of VRAM, checkpointing every 200 steps; if the box
 is interrupted, the same command resumes them. Use `tmux` (or `nohup`) so a dropped SSH session
 doesn't stop the queue. Bring back `model/runs/` (checkpoints, logs, `long_context.txt`,
