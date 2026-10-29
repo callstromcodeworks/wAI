@@ -124,3 +124,10 @@ Next local: working-memory span 128 instead of 512 (keys/query 512 vs 960), conc
 Working memory 128 (vs 512; concepts + fast weights, 100M, 4k): 1.1417 vs 1.1130, worse on long documents
 too (code 2-4k 0.965 vs 0.889), and no faster at this size (51.8k vs 50.5k tok/s). Next: same key budget
 spent on recall instead: window 256 + 8 expanded blocks (896 keys) vs window 512 + 4 (960).
+Recall vs working memory at equal key budget (100M, 4k): window 256 + 8 recalled blocks 1.1120 vs window
+512 + 4 blocks 1.1130; code 2-4k 0.878 vs 0.889. Halving working memory and doubling recall costs nothing
+(slightly better on code, where exact earlier detail matters); recall can substitute for working memory.
+
+**16:05 UTC. Owner's note on neurogenesis:** promising as a long-running "continued training" mechanism:
+few new modules relative to the whole, base frozen (neurons don't change function), new ones integrating
+with replay. Owner is considering next steps; nothing started on it.
