@@ -121,3 +121,6 @@ s_med_plain 53%, s_med_brain 45%, s_med_plain_ec64k 28%, c_med_combo 20%; disk 5
 **14:50 UTC.** Local: combination + earned-say critic (100M, 4k): 1.1142 vs 1.1096 without the critic
 (within noise; the critic only helped at 1B before). Critic stays out of the combination at this scale.
 Next local: working-memory span 128 instead of 512 (keys/query 512 vs 960), concepts + expansion + fast weights.
+Working memory 128 (vs 512; concepts + fast weights, 100M, 4k): 1.1417 vs 1.1130, worse on long documents
+too (code 2-4k 0.965 vs 0.889), and no faster at this size (51.8k vs 50.5k tok/s). Next: same key budget
+spent on recall instead: window 256 + 8 expanded blocks (896 keys) vs window 512 + 4 (960).
