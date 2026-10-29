@@ -190,18 +190,18 @@ def scale_group(vocab):
 
 def combo_group(vocab):
     """Phase 3: the brain parts together (sparse module bank + position-free concept memory + fast weights),
-    which added up at 100M tokens locally; tested where the bank's edge shows (1B) and at medium size."""
+    which added up at 100M tokens locally; 600M tokens each (budgeted to fit the rental), small and medium."""
     common = "--value_residual 1 --unet 1 --fp8 1 --n_kv_head 2 --seq_len 4096"
     memory = "--attn_mode concept --window 512 --concept_block 64 --concept_topk 4 --concept_rope 0 --fast_heads 2"
     bank = ("--arch brain --memory_sub 0 --critic 0 --draft_weight 0 --n_shared 1 --n_modules 33 "
             "--module_mode routed_attn --revive 0.1 --capacity 2.0")
     small, med = f"--vocab {vocab} --preset small --n_layer 8 {common}", f"--vocab {vocab} --preset medium {common}"
     return {
-        "c_med_combo": f"{med} {memory} {bank} --n_layer 16 --tokens 1.5e9",
-        "c_med_full4k": f"{med} --tokens 1.5e9",
-        "c_combo_full_t1b": f"{small} {memory} {bank} --tokens 1e9",
-        "c_combo_mem_t1b": f"{small} {memory} --tokens 1e9",
-        "c_full4k_t1b": f"{small} --tokens 1e9",
+        "c_med_combo": f"{med} {memory} {bank} --n_layer 16 --tokens 6e8",
+        "c_med_full4k": f"{med} --tokens 6e8",
+        "c_combo_full_t1b": f"{small} {memory} {bank} --tokens 6e8",
+        "c_combo_mem_t1b": f"{small} {memory} --tokens 6e8",
+        "c_full4k_t1b": f"{small} --tokens 6e8",
     }
 
 
