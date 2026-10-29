@@ -430,6 +430,10 @@ class BrainGPT(GPT):
             if i >= L - self.n_skip:
                 x = x + self.skip_w[L - 1 - i] * skips.pop()
             x = block(x, cos, sin, ctx)
+            grown_at = getattr(self, "grown_at", None)  # modules added later at several depths (forgetting.py)
+            if grown_at is not None and str(i) in grown_at:
+                bank_i, gate_i = grown_at[str(i)], self.grown_gates[str(i)]
+                x = x + bank_i(x, cos_m, sin_m, torch.sigmoid(gate_i(norm(x)).float()).to(x.dtype))[0]
             if i < self.n_skip:
                 skips.append(x)
         out = norm(x).bfloat16()
