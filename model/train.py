@@ -312,6 +312,7 @@ def parse_args():
     ap.add_argument("--mlp_mode", default="relu2", choices=["relu2", "spiking"],
                     help="spiking: MLP neurons integrate over recent tokens and fire binary spikes past a threshold")
     ap.add_argument("--spike_window", type=int, default=8, help="spiking: tokens a neuron integrates over")
+    ap.add_argument("--mlp_ratio", type=int, default=0, help="MLP hidden size / d_model (0 = the preset's, 4)")
     ap.add_argument("--depth_mode", default="block", choices=["block", "mlp"],
                     help="block: unrouted tokens skip the block; mlp: all get attention, routed tokens get the MLP")
     ap.add_argument("--arch", default="gpt", choices=["gpt", "brain"], help="brain = brain.py (modules, memory, critic)")
@@ -409,7 +410,7 @@ def main():
         cfg = (BrainConfig if ckpt["config"].get("arch") == "brain" else GPTConfig)(**ckpt["config"])
     else:
         arch = dict(PRESETS[args.preset])
-        arch.update({k: getattr(args, k) for k in ("n_layer", "n_head", "d_model") if getattr(args, k)})
+        arch.update({k: getattr(args, k) for k in ("n_layer", "n_head", "d_model", "mlp_ratio") if getattr(args, k)})
         common = dict(n_ranks=VOCABS[args.vocab], seq_len=args.seq_len, n_kv_head=args.n_kv_head,
                       kv_share=args.kv_share, value_residual=bool(args.value_residual), unet=bool(args.unet),
                       mla_rank=args.mla_rank, mla_rope_dim=args.mla_rope_dim, attn_mode=args.attn_mode,
