@@ -72,6 +72,8 @@ class GPTConfig:
     depth_every: int = 0
     depth_capacity: float = 0.25
     depth_step: float = 0.2      # threshold control gain (0.05 let blocks go silent for 100+ steps)
+    depth_mode: str = "block"    # "block": routed tokens skip the whole block; "mlp": every token gets
+                                 # attention (context), only routed tokens get the MLP (the heavy part)
 
     def __post_init__(self):
         self.n_kv_head = self.n_kv_head or self.n_head
@@ -79,6 +81,7 @@ class GPTConfig:
         assert self.attn_mode in ("full", "window", "concept")
         assert not self.depth_every or (self.attn_mode == "full" and self.kv_share == 1 and not self.mla_rank
                                          and not self.fast_heads), "depth routing needs plain full attention"
+        assert self.depth_mode in ("block", "mlp")
         assert self.attn_mode == "full" or (not self.mla_rank and self.window % self.concept_block == 0)
         if self.mla_rank:
             assert self.kv_share == 1 and self.n_kv_head == self.n_head, "MLA replaces GQA and K/V sharing"
@@ -247,6 +250,8 @@ class Block(nn.Module):
         processed depends only on it and earlier tokens, so this stays causal."""
         B, T, D = x.shape
         C = max(1, math.ceil(self.cfg.depth_capacity * T))
+        if self.cfg.depth_mode == "mlp":  # attention for everyone, then route the MLP
+            x = x + self.attn(norm(x), cos, sin, ctx)
         # scale-free score: the router's weight is normalised, so its output can't outgrow the threshold
         # (raw router logits grew faster than the threshold could follow and blocks went quiet)
         w = self.router.weight.float()
@@ -260,14 +265,17 @@ class Block(nn.Module):
         idx = idx[:, :C]                                                     # [B, C] token in each slot (T = empty)
         b = torch.arange(B, device=x.device)[:, None]
         xs = torch.cat([x, x.new_zeros(B, 1, D)], 1)[b, idx]                 # [B, C, D]
-        pos = idx.clamp(max=T - 1)
-        v0 = ctx["v0"]
-        if v0 is not None:  # value residual: the first layer's values at the same tokens
-            v0p = torch.cat([v0, v0.new_zeros(*v0.shape[:2], 1, v0.size(-1))], 2)
-            ctx["v0"] = v0p.gather(2, idx[:, None, :, None].expand(B, v0.size(1), C, v0.size(-1)))
-        y = xs + self.attn(norm(xs), cos[pos], sin[pos], ctx)
-        y = y + self.mlp(norm(y))
-        ctx["v0"] = v0
+        if self.cfg.depth_mode == "mlp":
+            y = xs + self.mlp(norm(xs))
+        else:
+            pos = idx.clamp(max=T - 1)
+            v0 = ctx["v0"]
+            if v0 is not None:  # value residual: the first layer's values at the same tokens
+                v0p = torch.cat([v0, v0.new_zeros(*v0.shape[:2], 1, v0.size(-1))], 2)
+                ctx["v0"] = v0p.gather(2, idx[:, None, :, None].expand(B, v0.size(1), C, v0.size(-1)))
+            y = xs + self.attn(norm(xs), cos[pos], sin[pos], ctx)
+            y = y + self.mlp(norm(y))
+            ctx["v0"] = v0
         g = torch.cat([torch.sigmoid(s), s.new_zeros(B, 1)], 1)[b, idx]     # router weight per slot
         out = torch.cat([x, x.new_zeros(B, 1, D)], 1)
         out.scatter_add_(1, idx[..., None].expand(B, C, D), ((y - xs).float() * g[..., None]).to(x.dtype))
@@ -400,9 +408,10 @@ class GPT(nn.Module):
         """Training FLOPs per token: 6 x matmul params (incl. the LM head) + causal attention."""
         c = self.cfg
         matmul = sum(p.numel() for p in self.matrix_params()) + c.vocab_size * c.d_model
-        for b in self.blocks:  # a routed block only computes on its share of the tokens
+        for b in self.blocks:  # a routed block (or its MLP) only computes on its share of the tokens
             if b.router is not None:
-                matmul -= (1 - c.depth_capacity) * sum(p.numel() for p in b.parameters() if p.dim() == 2)
+                part = b.mlp if c.depth_mode == "mlp" else b
+                matmul -= (1 - c.depth_capacity) * sum(p.numel() for p in part.parameters() if p.dim() == 2)
         keys = c.seq_len  # keys each query attends to
         if c.attn_mode != "full":
             keys = c.window + c.concept_block

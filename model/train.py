@@ -308,6 +308,8 @@ def parse_args():
     ap.add_argument("--fast_dim", type=int, default=64, help="fast-weight key/value size per head")
     ap.add_argument("--depth_every", type=int, default=0, help="route tokens through every n-th block (0 = off)")
     ap.add_argument("--depth_capacity", type=float, default=0.25, help="share of tokens a routed block processes")
+    ap.add_argument("--depth_mode", default="block", choices=["block", "mlp"],
+                    help="block: unrouted tokens skip the block; mlp: all get attention, routed tokens get the MLP")
     ap.add_argument("--arch", default="gpt", choices=["gpt", "brain"], help="brain = brain.py (modules, memory, critic)")
     ap.add_argument("--trunk_layers", type=int, default=3, help="brain: main blocks before the modules and memory")
     ap.add_argument("--gate_layers", type=int, default=2, help="brain: main blocks after the critic")
@@ -409,7 +411,7 @@ def main():
                       mla_rank=args.mla_rank, mla_rope_dim=args.mla_rope_dim, attn_mode=args.attn_mode,
                       window=args.window, concept_block=args.concept_block, concept_topk=args.concept_topk,
                       fast_heads=args.fast_heads, fast_dim=args.fast_dim, depth_every=args.depth_every,
-                      depth_capacity=args.depth_capacity, **arch)
+                      depth_capacity=args.depth_capacity, depth_mode=args.depth_mode, **arch)
         if args.arch == "brain":
             cfg = BrainConfig(**common, **{k: getattr(args, k) for k in (
                 "trunk_layers", "gate_layers", "n_modules", "module_dim", "module_layers", "module_heads",

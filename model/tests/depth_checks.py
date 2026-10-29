@@ -93,3 +93,32 @@ if text is not None:
 else:
     print("SKIP threshold control check: no validation text in model/data")
 ok("depth routing" in m.depth_stats(), "training log line", m.depth_stats().strip())
+
+# 4. mlp mode: every token gets attention, only routed tokens get the MLP
+cfg2 = GPTConfig(n_ranks=32763, seq_len=T, n_layer=4, n_head=4, d_model=256, n_kv_head=2, depth_every=2,
+                 depth_capacity=0.25, depth_mode="mlp")
+with torch.device("cuda"):
+    m2 = GPT(cfg2)
+blk = m2.blocks[1]
+with torch.no_grad():
+    for n, p in blk.named_parameters():
+        if n.endswith("proj.weight"):
+            p.normal_(0, 0.02)
+    x = torch.randn(2, T, 256, device="cuda")
+    ctx = lambda: {"cache": None, "v0": None, "kv": None, "rope_mla": None}
+    out = blk(x, cos, sin, ctx())
+    xa = x + blk.attn(norm(x), cos, sin, ctx())
+    w = blk.router.weight.float()
+    s = (norm(xa).float() @ (w / (w.norm() + 1e-6)).t()).squeeze(-1) * 4.0  # router sees the token after attention
+    ref = xa.clone()
+    for bi in range(2):
+        toks = ((s[bi] + blk.depth_bias) > 0).nonzero().flatten()[:math.ceil(0.25 * T)]
+        ref[bi, toks] += blk.mlp(norm(xa[bi, toks])) * torch.sigmoid(s[bi, toks])[:, None]
+    err = (out - ref).abs().max().item()
+    ok(err < 1e-3, "mlp mode: attention on all tokens, MLP on routed tokens only", f"max diff {err:.1e}")
+m2.eval()
+with torch.no_grad(), torch.autocast("cuda", torch.bfloat16):
+    ids = torch.randint(0, 32763, (2, T), device="cuda")
+    a = m2(ids).float()
+    ids2 = ids.clone(); ids2[:, 100] = (ids2[:, 100] + 1) % 32763
+    ok((a[:, :100] - m2(ids2).float()[:, :100]).abs().max().item() == 0, "mlp mode: causal at token 100")
