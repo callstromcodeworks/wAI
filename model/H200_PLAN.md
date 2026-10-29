@@ -103,3 +103,9 @@ all+replay 0.0027, all 0.0038). Without replay new modules alone forget a lot (0
 steps (0.039 vs 0.154 bpb on docs; 14.7M trainable). Brain analogue: new neurons for new material plus
 replay of old (sleep). A safe way to teach the agent new facts: grow modules, train with replay.
 Rental credit at 12:35 UTC: $70.42 ($0 at ~06:05 UTC Oct 30). Combo runs cut to 600M tokens to fit.
+
+**13:35 UTC. Neurogenesis follow-ups.** 900 steps: all weights + replay overfits the 3.3M-token docs
+(learned 0.099 < 0.154 at 300 steps, forgetting doubles); grow:8 + replay keeps improving (0.050) with
+forgetting flat (+0.0013 / +0.0026). grow:16 adds little (0.056). Adam lr 0.006 for the new modules:
+0.052 in 300 steps, same forgetting; 0.02 worse. Plateau ~0.05 vs 0.15 for full fine-tuning at ~10x less
+forgetting: new modules attach at one depth only. Follow-up (not this session): grow modules at several depths.
