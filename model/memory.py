@@ -87,7 +87,10 @@ class ConceptAttention(nn.Module):
         return BlockMask.from_kv_blocks(num[:, None].int().contiguous(), idx[:, None].int().contiguous(),
                                         BLOCK_SIZE=self.b, mask_mod=_causal)
 
-    def forward(self, q, k, v, x, scale):
+    def forward(self, q, k, v, x, scale, q_nope=None, k_nope=None):
+        """q_nope/k_nope (optional): the same queries and keys before RoPE. Given, the concepts are pooled
+        and scored from them, so a concept carries content but no position (and long contexts don't bring
+        concept distances never seen in training); the window and expanded blocks still use q, k."""
         B, H, T, D = q.shape
         Hkv, b = k.size(1), self.b
         assert T % b == 0, f"sequence length {T} must be a multiple of concept_block {b}"
@@ -98,7 +101,9 @@ class ConceptAttention(nn.Module):
                          kernel_options=self.tiles)
 
         # (2) concepts: pool each block's keys and values, attend to completed blocks (plus a null slot)
-        kb, vb = k.view(B, Hkv, nq, b, D), v.view(B, Hkv, nq, b, D)
+        kc_src = k if k_nope is None else k_nope
+        qc = q if q_nope is None else q_nope
+        kb, vb = kc_src.view(B, Hkv, nq, b, D), v.view(B, Hkv, nq, b, D)
         w = torch.softmax((kb.float() * self.pool.view(1, Hkv, 1, 1, D)).sum(-1), dim=-1)  # [B, Hkv, nq, b]
         kc = F.rms_norm((w[..., None] * kb.float()).sum(3), (D,))
         vc = (w[..., None] * vb.float()).sum(3)
@@ -109,7 +114,7 @@ class ConceptAttention(nn.Module):
         t = torch.arange(T, device=q.device)
         seen = torch.cat([torch.ones(T, 1, dtype=torch.bool, device=q.device),
                           (torch.arange(nq, device=q.device)[None, :] + 1) * b <= t[:, None]], 1)  # block done before t
-        s = (q.float() @ kc.transpose(-1, -2)) * scale
+        s = (qc.float() @ kc.transpose(-1, -2)) * scale
         p = torch.softmax(s.masked_fill(~seen, float("-inf")), dim=-1)                     # [B, H, T, nq+1]
         y_cmp = (p @ vc).to(q.dtype)
 

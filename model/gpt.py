@@ -63,6 +63,8 @@ class GPTConfig:
     window: int = 512
     concept_block: int = 64
     concept_topk: int = 4
+    concept_rope: bool = True  # False: concepts pooled and scored without positions (a gist has no timestamp);
+                               # window and expanded detail keep RoPE. True reproduces the phase-1 runs
     fast_heads: int = 0    # Hebbian fast-weight memory heads per block (0 = none); reset every sequence
     fast_dim: int = 64
     fast_chunk: int = 256
@@ -199,7 +201,10 @@ class Attention(nn.Module):
         out = self.qkv(x)
         if self.makes_kv:
             q, k, v = out.split(self.row_splits(), dim=-1)
-            k = apply_rope(norm(k.view(B, T, c.n_kv_head, c.head_dim)), cos, sin).transpose(1, 2)
+            k = norm(k.view(B, T, c.n_kv_head, c.head_dim))
+            if self.memory is not None and not c.concept_rope:
+                ctx["k_nope"] = k.transpose(1, 2)  # position-free keys for the concepts
+            k = apply_rope(k, cos, sin).transpose(1, 2)
             v = v.view(B, T, c.n_kv_head, c.head_dim).transpose(1, 2)
             if c.value_residual:
                 if ctx["v0"] is None:
@@ -210,14 +215,16 @@ class Attention(nn.Module):
                 k, v = self.kv_transform(k), self.kv_transform(v)
         else:
             q = out
-        q = apply_rope(norm(q.view(B, T, c.n_head, c.head_dim)), cos, sin).transpose(1, 2)
+        q = norm(q.view(B, T, c.n_head, c.head_dim))
+        q_nope = q.transpose(1, 2) if self.memory is not None and not c.concept_rope else None
+        q = apply_rope(q, cos, sin).transpose(1, 2)
         if self.makes_kv:
             # (keys, values, attention mask or None, causal?) shared with the layers that reuse them
             ctx["kv"] = (k, v, None, True) if ctx["cache"] is None else ctx["cache"].extend(self.kv_index, q, k, v)
         K, V, mask, causal = ctx["kv"]
         if self.memory is not None:
             assert ctx["cache"] is None, "window/concept attention has no incremental decoding yet"
-            y = self.memory(q, K, V, x, c.attn_scale)
+            y = self.memory(q, K, V, x, c.attn_scale, q_nope, ctx.get("k_nope") if q_nope is not None else None)
         else:
             y = F.scaled_dot_product_attention(q, K, V, attn_mask=mask, is_causal=causal and mask is None and T > 1,
                                                scale=c.attn_scale, enable_gqa=c.n_kv_head != c.n_head)

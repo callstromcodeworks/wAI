@@ -42,3 +42,21 @@ Local (RTX 4070, 100M tokens) depth routing: 8 blocks with routing at 25% / 50%:
 plain8 1.1490 (29% / 16% faster, not enough). Equal compute, 12 blocks routed every 2nd at 25%: 1.1604
 (104.6k tok/s) vs plain8 1.1490 (107k). MLP-only routing (everyone gets attention): 1.1457 at 90k tok/s,
 better per token but slower. Not a win at this scale; keep for the larger-scale test only.
+
+**07:50 UTC. Long-document scores (long_context.py, 40 English + 40 code docs of 8k+ tokens; trained at 4k):**
+
+| run | keys/query | Eng 2-4k | Eng 4-8k | code 2-4k | code 4-8k |
+|---|---:|---:|---:|---:|---:|
+| full | 8,192 | 1.1621 | 1.1851 | 0.6377 | 0.6350 |
+| window 512 | 576 | 1.1961 | 1.2060 | 0.7256 | 0.7125 |
+| concept | 960 | 1.1797 | 1.6716 | 0.6815 | 1.1475 |
+| concept, no expansion | 704 | 1.1886 | 1.3654 | 0.7123 | 0.8424 |
+| concept + fast weights | 960 | 1.1773 | 1.2018 | 0.6766 | 0.7564 |
+| window + fast weights | 576 | 1.1992 | 1.2083 | 0.7279 | 0.7158 |
+
+Concept memory recovers ~half of full attention's long-range gain at 8.5x fewer keys; expansion is half
+of that; fast weights add a small, consistent gain on top of concepts (both seeds) but nothing on a bare
+window. Past the training length concept memory breaks (English 4-8k 1.67): its summaries pool
+RoPE-rotated keys, so distant concepts look like nothing seen in training. Fix for phase 2: position-free
+concepts (pooled from pre-RoPE keys, scored with pre-RoPE queries); window and expanded detail keep
+positions. Then retrain at 16k.

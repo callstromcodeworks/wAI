@@ -5,7 +5,7 @@ MODEL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, MODEL)
 import torch
 import torch.nn.functional as F
-from gpt import GPT, GPTConfig, norm
+from gpt import GPT, GPTConfig, norm, rope_tables
 from memory import ConceptAttention, FastWeights
 import train
 
@@ -126,3 +126,35 @@ if os.path.exists(CKPT):
     ok(old.cfg.attn_mode == "full" and old.blocks[0].fast is None, "final 12-hour model loads strictly, full attention")
 else:
     print("SKIP old checkpoint check: no final_ec32k_gqa here")
+
+# 6. position-free concepts (concept_rope=False)
+with torch.device("cuda"):
+    mc2 = ConceptAttention(cfgc)
+with torch.no_grad():
+    mc2.pool.normal_(0, 0.5); mc2.gate.weight.normal_(0, 0.05)
+same = (mc2(q, k, v, x, scale) - mc2(q, k, v, x, scale, q, k)).abs().max().item()
+ok(same == 0, "passing the same q/k as position-free inputs changes nothing (plumbing)")
+cfgn = GPTConfig(**{**base, "attn_mode": "concept", "concept_topk": 2, "concept_rope": False})
+with torch.device("cuda"):
+    mn = GPT(cfgn)
+ids = torch.randint(0, 32763, (2, T + 1), device="cuda")
+with torch.autocast("cuda", torch.bfloat16):
+    mn.loss(mn(ids[:, :-1]), ids[:, 1:]).backward()
+dead = [n for n, p_ in mn.named_parameters() if p_.grad is None]
+ok(not dead, "position-free concepts: every parameter gets gradient", str(dead[:3]))
+mn.eval()
+with torch.no_grad(), torch.autocast("cuda", torch.bfloat16):
+    a = mn(ids[:, :-1]).float()
+    ids2 = ids[:, :-1].clone(); ids2[:, 600] = (ids2[:, 600] + 1) % 32763
+    ok((a[:, :600] - mn(ids2).float()[:, :600]).abs().max().item() == 0, "position-free concepts: causal at token 600")
+# a concept's key doesn't depend on where its block sits: shifting the positions leaves kc unchanged
+blk_attn = mn.blocks[0].attn
+with torch.no_grad():
+    h = norm(torch.randn(1, T, 256, device="cuda"))
+    ctx1 = {"cache": None, "v0": None, "kv": None, "rope_mla": None}
+    ctx2 = {"cache": None, "v0": None, "kv": None, "rope_mla": None}
+    blk_attn(h, mn.rope_cos[:T], mn.rope_sin[:T], ctx1)
+    shifted_cos, shifted_sin = rope_tables(2 * T, 64, 10000.0, device="cuda")
+    blk_attn(h, shifted_cos[T:], shifted_sin[T:], ctx2)
+    ok(torch.equal(ctx1["k_nope"], ctx2["k_nope"]) and not torch.equal(ctx1["kv"][0], ctx2["kv"][0]),
+       "concept keys are position-free while window keys keep their positions")
