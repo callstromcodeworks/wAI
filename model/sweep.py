@@ -137,6 +137,8 @@ def brain_group(vocab):
         f"b{v}_sparseB32c2_t1b": f"{brain} --memory_sub 0 --critic 0 --draft_weight 0 --n_shared 1 "
                                  f"--module_mode routed_attn --n_modules 33 --revive 0.1 --capacity 2.0 --tokens 1e9",
         f"b{v}_plain8_t1b": f"{brain} --n_modules 0 --memory_sub 0 --critic 0 --draft_weight 0 --tokens 1e9",
+        # same-hardware baselines: H200 runs score lower than the RTX 4070 runs at equal settings
+        f"b{v}_plain8_t100m_s7": f"{brain} --n_modules 0 --memory_sub 0 --critic 0 --draft_weight 0 --tokens 1e8 --seed 7",
     }
 
 
