@@ -67,6 +67,9 @@ def queues():
         "memory": sweep.memory_group("ec32k"),
         "memory2": sweep.memory2_group("ec32k"),
         "scale": sweep.scale_group("ec32k"),
+        # medium brain diverged at step 1660 (same seed reproduces it): does FP8 or the unbounded router cause it?
+        "diag": {f"{k}_{tag}": f"{v} {extra}" for k, v in sweep.scale_group("ec32k").items() if k == "s_med_brain"
+                 for tag, extra in (("nofp8", "--fp8 0"), ("sigmoid", "--sigmoid_router 1"))},
         "h200base": pick(["b32k_plain8_t100m", "b32k_plain8_t100m_s7"]),
         "combo_med": {k: v for k, v in sweep.combo_group("ec32k").items() if k.startswith("c_med")},
         "combo_small": {k: v for k, v in sweep.combo_group("ec32k").items() if not k.startswith("c_med")},
