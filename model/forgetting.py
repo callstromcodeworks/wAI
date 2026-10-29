@@ -58,6 +58,10 @@ def prepare(path, vocab="ec32k", val_frac=0.1, seed=0):
 
 
 def load_model(path):
+    if not path.endswith(".pt"):  # an exported run (safetensors + JSON), e.g. one trained on a rented GPU
+        import safe_checkpoint
+        model, meta = safe_checkpoint.load_model(path)
+        return model, meta
     ck = torch.load(path, map_location="cpu", weights_only=False)
     is_brain = ck["config"].get("arch") == "brain"
     cfg = (BrainConfig if is_brain else GPTConfig)(**ck["config"])
