@@ -144,3 +144,6 @@ Next: F = 6 stages x 1 module (smaller, more frequent additions), same total.
 F 6 stages x 1 module (100 + 25 steps each): learned 0.064, +0.0015, +0.0041: worse than E's 3 x 2. Stages too
 small to integrate; gains stop after ~4. Sweet spot: a few modules per stage, enough steps to mature them.
 Next: E with twice the steps per stage.
+E2 (E with 400 + 100 steps per stage): learned 0.096 (vs 0.080), English +0.0013, code +0.0030: more training
+raises learning with forgetting flat, unlike full fine-tuning (which overfit and forgot 2x more at 900 steps).
+Safe to run long, as the owner proposed for continued training.
