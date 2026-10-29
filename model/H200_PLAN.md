@@ -88,3 +88,10 @@ trained at 4k, 20 + 20 docs at 8k): English 2-4k -> 4-8k 1.284 -> 1.300 (+1.2%),
 (+4.7%), vs phase 1's RoPE concepts +42% / +68% and full attention +2% / 0%. Combination (bank + concepts
 + fast weights) adds up: 1.1096 vs 1.1130 without the bank at 100M tokens. Phase 3 queued on the H200:
 combo at medium size (1.5B) and at 1B, with full-attention references.
+
+**12:00 UTC. Forgetting at 1B tokens** (local, on the H200 models via safetensors). Lost at equal learning
+(0.052 bpb of docs): plain all 0.0051, 32-bank all 0.0053, 32-bank bank-only 0.0104, bank3 bank-only
+0.0128, plain + 25% replay 0.0040, bank + 25% replay 0.0040. 1B models forget far less than 100M ones
+(English -0.08 vs -0.20); updating only existing modules still forgets ~2x more; replay still best.
+Next: neurogenesis (forgetting.py --train grow:K): add K fresh routed modules, freeze the old ones (and
+their router rows), let revival bring the new ones in; growing starts output-identical to the old model.
