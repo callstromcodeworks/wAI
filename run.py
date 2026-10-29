@@ -25,7 +25,6 @@ Queues (from model/sweep.py):
 import argparse
 import hashlib
 import importlib
-import json
 import os
 import re
 import shutil
@@ -143,9 +142,9 @@ def cmd_data(a):
             if r.returncode:
                 return r.returncode
     for s in SOURCES:
-        st = json.load(open(os.path.join(DATA, s, "stats.json")))
-        n = len([f for f in os.listdir(os.path.join(DATA, s)) if f.startswith("train_")])
-        say(f"  {s}: {n} train shards, {st.get('tokens', 0) / 1e9:.2f}B tokens in the last build")
+        shards = [f for f in os.listdir(os.path.join(DATA, s)) if f.startswith("train_")]
+        tokens = sum((os.path.getsize(os.path.join(DATA, s, f)) - 1024) // 2 for f in shards)  # uint16 after a 1 KB header
+        say(f"  {s}: {len(shards)} train shards, {tokens / 1e9:.2f}B tokens")
     crawl = os.path.join(DATA, "crawl")
     say("  forgetting-test docs: " + ("present" if os.path.exists(os.path.join(crawl, "train.npy")) else
                                      "absent (optional: copy model/data/ec32k/crawl/*.npy)"))
@@ -153,22 +152,33 @@ def cmd_data(a):
 
 
 def cmd_test(a):
-    jobs = {}
-    unit = os.path.join(ROOT, "build", "fasttok_unit")
-    if os.path.exists(unit):
-        jobs["fasttok unit tests"] = [unit]
+    # fasttok against tiktoken on the bundled vocabulary and the ec32k prefix the models use (no download;
+    # tests/unit.cpp also needs OpenAI's o200k/cl100k files, so it's left to tokenizer development)
+    jobs = {"tokenizer = tiktoken": [PY, os.path.join(ROOT, "tests", "test_vs_tiktoken.py"),
+                                     "--lib", os.path.join(ROOT, "build", "libfasttok.so"),
+                                     "--vocab-dir", os.path.join(ROOT, "vocab"),
+                                     "--encodings", "ec200k_base,ec200k_base:32763", "--fuzz", "20000",
+                                     "--skip-codepoints"]}
     jobs["fused loss"] = [PY, os.path.join(MODEL, "test_fused_ce.py")]
     for t in TEST_SUITES:
         jobs[t] = [PY, os.path.join(MODEL, "tests", f"{t}.py")]
-    procs = {name: subprocess.Popen(cmd, cwd=MODEL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-             for name, cmd in jobs.items()}
+    start = lambda cmd: subprocess.Popen(cmd, cwd=MODEL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    # the fused-loss benchmark fills the GPU on purpose, so it runs alone first; the rest run together
+    procs = {"fused loss": start(jobs.pop("fused loss"))}
+    procs["fused loss"].wait()
+    procs.update({name: start(cmd) for name, cmd in jobs.items()})
+    jobs = procs
     failed = 0
     for name, p in procs.items():
         out = p.communicate()[0]
         passes, fails, skips = (len(re.findall(rf"^{w}\b", out, re.M)) for w in ("PASS", "FAIL", "SKIP"))
         bad = p.returncode != 0 or fails > 0 or "Traceback" in out
         failed += bad
-        say(f"  {'FAIL' if bad else 'ok  '} {name}: {passes} passed, {fails} failed" + (f", {skips} skipped" if skips else ""))
+        if passes or fails:
+            detail = f"{passes} passed, {fails} failed" + (f", {skips} skipped" if skips else "")
+        else:  # suites with their own report format: show their last line
+            detail = (out.strip().splitlines() or ["no output"])[-1][:100]
+        say(f"  {'FAIL' if bad else 'ok  '} {name}: {detail}")
         if bad:
             say("\n".join("      " + l for l in out.strip().splitlines()[-15:]))
     say(f"\n{len(jobs) - failed} of {len(jobs)} suites passed")
