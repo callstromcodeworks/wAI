@@ -117,3 +117,7 @@ limit. Recipe that works: grow new modules, train them with replay, keep the bas
 1.1417, 64-bank 1.1415: level at 100M (the earlier -0.007 was home-vs-H200 hardware). The bank's advantage
 appears only with longer training (1B: plain 0.9341, 32-bank 0.9296, bank3 0.927). Queue on schedule:
 s_med_plain 53%, s_med_brain 45%, s_med_plain_ec64k 28%, c_med_combo 20%; disk 59/100 GB.
+
+**14:50 UTC.** Local: combination + earned-say critic (100M, 4k): 1.1142 vs 1.1096 without the critic
+(within noise; the critic only helped at 1B before). Critic stays out of the combination at this scale.
+Next local: working-memory span 128 instead of 512 (keys/query 512 vs 960), concepts + expansion + fast weights.
