@@ -304,6 +304,7 @@ def parse_args():
     ap.add_argument("--window", type=int, default=512, help="window/concept: recent tokens read in full")
     ap.add_argument("--concept_block", type=int, default=64, help="concept: tokens summarised per concept")
     ap.add_argument("--concept_topk", type=int, default=4, help="concept: older blocks expanded per query block (0 = none)")
+    ap.add_argument("--concept_rope", type=int, default=1, help="concept: 0 = position-free concepts (gist without timestamp)")
     ap.add_argument("--fast_heads", type=int, default=0, help="Hebbian fast-weight heads per block (0 = none)")
     ap.add_argument("--fast_dim", type=int, default=64, help="fast-weight key/value size per head")
     ap.add_argument("--depth_every", type=int, default=0, help="route tokens through every n-th block (0 = off)")
@@ -412,7 +413,7 @@ def main():
         common = dict(n_ranks=VOCABS[args.vocab], seq_len=args.seq_len, n_kv_head=args.n_kv_head,
                       kv_share=args.kv_share, value_residual=bool(args.value_residual), unet=bool(args.unet),
                       mla_rank=args.mla_rank, mla_rope_dim=args.mla_rope_dim, attn_mode=args.attn_mode,
-                      window=args.window, concept_block=args.concept_block, concept_topk=args.concept_topk,
+                      window=args.window, concept_block=args.concept_block, concept_topk=args.concept_topk, concept_rope=bool(args.concept_rope),
                       fast_heads=args.fast_heads, fast_dim=args.fast_dim, depth_every=args.depth_every,
                       depth_capacity=args.depth_capacity, depth_mode=args.depth_mode, mlp_mode=args.mlp_mode,
                       spike_window=args.spike_window, **arch)
