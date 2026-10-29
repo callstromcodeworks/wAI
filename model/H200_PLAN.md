@@ -32,3 +32,13 @@ dynamics) trained with surrogate gradients, compared against the dense blocks at
 
 ## Log
 (results and decisions get appended here as runs finish)
+
+**07:20 UTC.** Phase 1 memory round (300M tokens, 4,096-token sequences, ordinary validation):
+full 0.9727 | concept 0.9747 / 0.9845 (seed 7) | concept no-expansion 0.9845 | window 0.9913 |
+window + fast weights 0.9944 | concept + fast weights ~0.977. Concept memory sits between window and
+full; fast weights don't help (yet). Seed noise ~0.01, so the long-document scores decide.
+
+Local (RTX 4070, 100M tokens) depth routing: 8 blocks with routing at 25% / 50%: 1.1902 / 1.1802 vs
+plain8 1.1490 (29% / 16% faster, not enough). Equal compute, 12 blocks routed every 2nd at 25%: 1.1604
+(104.6k tok/s) vs plain8 1.1490 (107k). MLP-only routing (everyone gets attention): 1.1457 at 90k tok/s,
+better per token but slower. Not a win at this scale; keep for the larger-scale test only.
