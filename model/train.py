@@ -312,6 +312,7 @@ def parse_args():
     ap.add_argument("--mlp_mode", default="relu2", choices=["relu2", "spiking"],
                     help="spiking: MLP neurons integrate over recent tokens and fire binary spikes past a threshold")
     ap.add_argument("--spike_window", type=int, default=8, help="spiking: tokens a neuron integrates over")
+    ap.add_argument("--spike_levels", type=int, default=1, help="spiking: spikes per token (1 = binary, 3 = 2-bit rate code)")
     ap.add_argument("--mlp_ratio", type=int, default=0, help="MLP hidden size / d_model (0 = the preset's, 4)")
     ap.add_argument("--depth_mode", default="block", choices=["block", "mlp"],
                     help="block: unrouted tokens skip the block; mlp: all get attention, routed tokens get the MLP")
@@ -417,7 +418,7 @@ def main():
                       window=args.window, concept_block=args.concept_block, concept_topk=args.concept_topk, concept_rope=bool(args.concept_rope),
                       fast_heads=args.fast_heads, fast_dim=args.fast_dim, depth_every=args.depth_every,
                       depth_capacity=args.depth_capacity, depth_mode=args.depth_mode, mlp_mode=args.mlp_mode,
-                      spike_window=args.spike_window, **arch)
+                      spike_window=args.spike_window, spike_levels=args.spike_levels, **arch)
         if args.arch == "brain":
             cfg = BrainConfig(**common, **{k: getattr(args, k) for k in (
                 "trunk_layers", "gate_layers", "n_modules", "module_dim", "module_layers", "module_heads",
