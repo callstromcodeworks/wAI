@@ -28,6 +28,7 @@ import time
 
 import numpy as np
 import torch
+import torch.nn as nn
 from torch.nn.attention import sdpa_kernel
 
 from brain import BrainConfig, BrainGPT
@@ -92,39 +93,23 @@ def score(model, rows, token_bytes, batch=8):
     return loss_sum / math.log(2) / byte_sum
 
 
-def grow(model, k):
-    """Neurogenesis: a copy of a sparse-bank model with k new routed modules. The old modules and their
-    router rows keep their weights and are frozen (gradient masks: they share stacked tensors with the new
-    ones); only the new modules and their router rows learn. Returns (model, [(param, grad mask)])."""
-    import dataclasses
+def grow(model, k, calib=None):
+    """Neurogenesis: give a trained model k new modules beside its existing ones. They form a separate,
+    additive bank (each module sees every token, with its own sigmoid gate) whose output starts at exactly
+    zero, so the model is unchanged at first; only the new modules and their gate learn, while every old
+    weight, including the old router, stays frozen. (Growing the existing routed bank disturbed the old
+    routing: a new module competing in the top-k displaces a token's second choice.)
+    Returns (model, trainable parameters)."""
+    from brain import ModuleBank
     cfg = model.cfg
-    assert cfg.module_mode != "dense" and cfg.n_modules, "growing needs a sparse module bank"
-    R, de = cfg.n_modules - cfg.n_shared, cfg.module_dim
-    # same slots per old module (capacity is a share of the routed tokens); revival brings new modules in
-    cfg2 = dataclasses.replace(cfg, n_modules=cfg.n_modules + k, revive=cfg.revive or 0.1,
-                               capacity=cfg.capacity * (R + k) / R)
     with torch.device("cuda"):
-        new = BrainGPT(cfg2)
-    old_state, new_state = model.state_dict(), new.state_dict()
-    for name, t in old_state.items():
-        tgt = new_state[name]
-        if tgt.shape == t.shape:
-            tgt.copy_(t)
-        else:  # bank tensors grow along the module dimension: old modules first
-            tgt[tuple(slice(0, n) for n in t.shape)].copy_(t)
-    with torch.no_grad():  # new modules start silent: never chosen until revival lifts their bias
-        new.router.weight[R:] = 0
-        new.route_bias[R:] = -3.0
-    masks = []
-    for name, p in new.named_parameters():
-        if name.startswith("bank.") or name == "router.weight":
-            m = torch.ones_like(p)
-            if name in ("bank.w_in", "bank.w_out"):
-                m[:R * de] = 0
-            else:
-                m[:R] = 0
-            masks.append((p, m))
-    return new, masks
+        model.grown = ModuleBank(cfg, k, attention=True)
+        model.grown_gate = nn.Linear(cfg.d_model, k)
+    model.grown.reset_parameters()            # w_out starts at zero: no change until it learns
+    with torch.no_grad():
+        nn.init.normal_(model.grown_gate.weight, std=0.02)
+        nn.init.zeros_(model.grown_gate.bias)
+    return model, list(model.grown.parameters()) + list(model.grown_gate.parameters())
 
 
 def trainable(model, spec):
@@ -150,16 +135,14 @@ def run(a):
         p.requires_grad_(False)
     masks = []
     if a.train.startswith("grow:"):
-        model, masks = grow(model, int(a.train[5:]))
+        a.grow_k = int(a.train[5:])
+        model, params = grow(model, a.grow_k)
         for p in model.parameters():
             p.requires_grad_(False)
-        params = [p for p, _ in masks]
     else:
         params = trainable(model, a.train)
     for p in params:
         p.requires_grad_(True)
-    for p, m in masks:  # frozen old modules: their slices get no gradient
-        p.register_hook(lambda g, m=m: g * m)
     ids_train = np.load(os.path.join(HERE, "data", vocab, "crawl", "train.npy"))
     ids_val = np.load(os.path.join(HERE, "data", vocab, "crawl", "val.npy"))
     keep = {}
@@ -220,8 +203,6 @@ def run(a):
             if opt:
                 opt.step()
         model.zero_grad(set_to_none=True)
-        if masks:  # growing: revival gives the new modules tokens to learn from
-            model.update_after_step(parts)
         if step in a.eval_at:
             curve.append(evaluate(step))
     res = dict(name=a.name, ckpt=a.ckpt, train=a.train, replay=a.replay, trainable_params=n_train, steps=a.steps,
