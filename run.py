@@ -42,7 +42,8 @@ VOCAB_FILE = os.path.join(ROOT, "vocab", "ec200k_base.tiktoken")
 VOCAB_SHA256 = "7a17729c50552022f725e9ea880f40697933a7318c9e9cb2e0d50cd7e45b0b15"
 DATA = os.path.join(MODEL, "data", "ec32k")
 SOURCES = {"fineweb-edu": 3, "code": 6}  # upstream parquet files: the same text as the home training set
-TEST_SUITES = ["brain_checks", "gate_checks", "bias_check", "sparse_checks", "memory_checks", "revive_check"]
+TEST_SUITES = ["brain_checks", "gate_checks", "bias_check", "sparse_checks", "memory_checks", "revive_check",
+               "depth_checks"]
 DEFAULT_QUEUE = "memory,critic1b,bigbank2"
 
 

@@ -306,6 +306,8 @@ def parse_args():
     ap.add_argument("--concept_topk", type=int, default=4, help="concept: older blocks expanded per query block (0 = none)")
     ap.add_argument("--fast_heads", type=int, default=0, help="Hebbian fast-weight heads per block (0 = none)")
     ap.add_argument("--fast_dim", type=int, default=64, help="fast-weight key/value size per head")
+    ap.add_argument("--depth_every", type=int, default=0, help="route tokens through every n-th block (0 = off)")
+    ap.add_argument("--depth_capacity", type=float, default=0.25, help="share of tokens a routed block processes")
     ap.add_argument("--arch", default="gpt", choices=["gpt", "brain"], help="brain = brain.py (modules, memory, critic)")
     ap.add_argument("--trunk_layers", type=int, default=3, help="brain: main blocks before the modules and memory")
     ap.add_argument("--gate_layers", type=int, default=2, help="brain: main blocks after the critic")
@@ -406,7 +408,8 @@ def main():
                       kv_share=args.kv_share, value_residual=bool(args.value_residual), unet=bool(args.unet),
                       mla_rank=args.mla_rank, mla_rope_dim=args.mla_rope_dim, attn_mode=args.attn_mode,
                       window=args.window, concept_block=args.concept_block, concept_topk=args.concept_topk,
-                      fast_heads=args.fast_heads, fast_dim=args.fast_dim, **arch)
+                      fast_heads=args.fast_heads, fast_dim=args.fast_dim, depth_every=args.depth_every,
+                      depth_capacity=args.depth_capacity, **arch)
         if args.arch == "brain":
             cfg = BrainConfig(**common, **{k: getattr(args, k) for k in (
                 "trunk_layers", "gate_layers", "n_modules", "module_dim", "module_layers", "module_heads",
@@ -515,7 +518,7 @@ def main():
         muon.step()
         adam.step()
         model.zero_grad(set_to_none=True)
-        if hasattr(model, "update_after_step") and step_parts:
+        if hasattr(model, "update_after_step"):
             model.update_after_step(step_parts)
         step += 1
         tokens_seen += tokens_per_step
@@ -549,6 +552,8 @@ def main():
             aux_txt = "".join(f" | {k} {v:.3f}" for k, v in aux.items() if k != "usage")
             if "usage" in aux:
                 aux_txt += f" | modules fire {min(aux['usage']):.0%}-{max(aux['usage']):.0%} of tokens"
+            if hasattr(model, "depth_stats"):
+                aux_txt += model.depth_stats()
             print(f"step {step}/{total_steps} | loss {loss_val:.4f} | lr x{mult:.3f} | {tps:,.0f} tok/s | "
                   f"MFU {fpt * tps / 1e12 / peak:.1%} | {dt / steps_since_log:.2f} s/step | mem {mem:.1f} GiB | "
                   f"{tokens_seen / 1e9:.3f}B tokens{aux_txt}", flush=True)
