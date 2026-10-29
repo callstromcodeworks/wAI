@@ -60,3 +60,7 @@ window. Past the training length concept memory breaks (English 4-8k 1.67): its 
 RoPE-rotated keys, so distant concepts look like nothing seen in training. Fix for phase 2: position-free
 concepts (pooled from pre-RoPE keys, scored with pre-RoPE queries); window and expanded detail keep
 positions. Then retrain at 16k.
+
+**08:00 UTC. Local spiking MLP** (8 blocks, 100M tokens): 1.1999 vs plain8 1.1490 (+4.4%), 82k vs 107k
+tok/s, 21-33% of neurons firing. Diagnosing: spike_window 1 (binary threshold, no integration) and
+mlp_ratio 8 (twice the neurons, as brains offset 1-bit spikes with numbers).
