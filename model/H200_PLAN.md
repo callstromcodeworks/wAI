@@ -109,3 +109,6 @@ Rental credit at 12:35 UTC: $70.42 ($0 at ~06:05 UTC Oct 30). Combo runs cut to 
 forgetting flat (+0.0013 / +0.0026). grow:16 adds little (0.056). Adam lr 0.006 for the new modules:
 0.052 in 300 steps, same forgetting; 0.02 worse. Plateau ~0.05 vs 0.15 for full fine-tuning at ~10x less
 forgetting: new modules attach at one depth only. Follow-up (not this session): grow modules at several depths.
+Multi-depth growth (2 new modules after blocks 1, 3, 5, 7; same 14.7M params; replay 25%, lr 0.006): learned
+0.058 vs 0.052 single-depth, forgetting +0.0020 / +0.0038. Small gain; the module width (256) is the likelier
+limit. Recipe that works: grow new modules, train them with replay, keep the base frozen.

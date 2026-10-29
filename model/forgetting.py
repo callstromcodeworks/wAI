@@ -112,6 +112,23 @@ def grow(model, k, calib=None):
     return model, list(model.grown.parameters()) + list(model.grown_gate.parameters())
 
 
+def grow_deep(model, k, every=2):
+    """Neurogenesis at several depths: k new modules after every `every`-th block (as grow(), each set with
+    its own gate and an output starting at zero, old weights frozen)."""
+    from brain import ModuleBank
+    cfg = model.cfg
+    layers = [str(i) for i in range(1, cfg.n_layer, every)]
+    with torch.device("cuda"):
+        model.grown_at = nn.ModuleDict({i: ModuleBank(cfg, k, attention=True) for i in layers})
+        model.grown_gates = nn.ModuleDict({i: nn.Linear(cfg.d_model, k) for i in layers})
+    with torch.no_grad():
+        for i in layers:
+            model.grown_at[i].reset_parameters()
+            nn.init.normal_(model.grown_gates[i].weight, std=0.02)
+            nn.init.zeros_(model.grown_gates[i].bias)
+    return model, list(model.grown_at.parameters()) + list(model.grown_gates.parameters())
+
+
 def trainable(model, spec):
     if spec == "all":
         return [p for n, p in model.named_parameters() if n != "wte.weight"]
@@ -134,7 +151,11 @@ def run(a):
     for p in model.parameters():
         p.requires_grad_(False)
     masks = []
-    if a.train.startswith("grow:"):
+    if a.train.startswith("growdeep:"):
+        model, params = grow_deep(model, int(a.train[9:]))
+        for p in model.parameters():
+            p.requires_grad_(False)
+    elif a.train.startswith("grow:"):
         a.grow_k = int(a.train[5:])
         model, params = grow(model, a.grow_k)
         for p in model.parameters():
