@@ -320,6 +320,8 @@ def cmd_export(a):
         for name in runs:
             ck = os.path.join(run_dir(name), "ckpt.pt")
             done = os.path.join(run_dir(name), "model.safetensors")
+            if not os.path.exists(ck):  # checkpoint removed after its export was brought home (disk space)
+                continue
             if run_state(name) == "done" and (not os.path.exists(done) or os.path.getmtime(done) < os.path.getmtime(ck)):
                 safe_checkpoint.export(ck)
                 n += 1
