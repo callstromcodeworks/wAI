@@ -82,6 +82,11 @@ class BrainConfig(GPTConfig):
     # the critic earns its say: 0 = full say from the start; 1 = scaled by its track record (trust);
     # 2 = trust x its per-token confidence (it also predicts how unsure it is about each token)
     critic_gate: int = 0
+    # judge: ONE judging module beside the others (the shared module gets a small head, on detached features) that
+    # estimates each token's error and how sure it is. 1 = judge only; 2 = its estimate sets each token's number of
+    # routed modules (top_k - 1 / top_k / top_k + 1 for the easiest / middle / hardest third, same average), once
+    # its track record earns trust (as critic_gate); 3 = the same allocation by a random score (control)
+    judge: int = 0
     gate_lo: float = 0.3         # trust is 0 while the critic's error correlation is below this...
     gate_hi: float = 0.6         # ...and 1 at or above this
     gate_observe_steps: int = 100  # optimizer steps of observing only, whatever the record
@@ -257,6 +262,12 @@ class BrainGPT(GPT):
                     self.register_buffer(name, torch.zeros(()))
         else:
             self.critic = None
+        if cfg.judge:
+            assert cfg.n_shared >= 1 and cfg.module_mode != "dense" and cfg.top_k >= 2 and not cfg.critic
+            self.judge_head = nn.Sequential(nn.Linear(cfg.module_dim, 64), nn.ReLU(), nn.Linear(64, 2))
+            for name in ("trust", "corr_ema", "logvar_ref", "gate_steps"):
+                self.register_buffer(name, torch.zeros(()))
+            self.register_buffer("judge_q", torch.zeros(2))  # running third / two-thirds cut-offs of its estimate
         self.reset_parameters()
 
     @torch.no_grad()
@@ -276,8 +287,12 @@ class BrainGPT(GPT):
             if self.err_head.bias.numel() > 1:
                 nn.init.constant_(self.err_head.bias[1], 2.0)  # unsure to begin with (std ~2.7 nats)
             nn.init.zeros_(self.err_to_resid)
+        if getattr(self, "judge_head", None) is not None:
+            nn.init.zeros_(self.judge_head[2].weight)
+            nn.init.constant_(self.judge_head[2].bias[0], 3.0)
+            nn.init.constant_(self.judge_head[2].bias[1], 2.0)
 
-    def route(self, x):
+    def route(self, x, judged=None):
         """Per-token gates [B, T, E] (shared modules at 1, top-k routed renormalized), the
         load-balancing loss over the routed modules, and which modules fired."""
         c = self.cfg
@@ -291,6 +306,23 @@ class BrainGPT(GPT):
         n_routed = c.n_modules - c.n_shared
         if c.top_k:
             choose = scores + self.route_bias if (c.balance_bias or c.revive) else scores
+            if judged is not None and c.judge >= 2:  # the judge sets each token's number of modules
+                top_i = choose.topk(c.top_k + 1, dim=-1).indices
+                score = torch.rand_like(judged) if c.judge == 3 else judged
+                lo, hi = (1 / 3, 2 / 3) if c.judge == 3 else (self.judge_q[0], self.judge_q[1])
+                on = (self.trust >= 0.5).float()  # its say is earned: until then every token gets top_k
+                k = c.top_k + on * ((score > hi).float() - (score < lo).float())        # [B, T]
+                keep = torch.arange(c.top_k + 1, device=x.device) < k[..., None]          # ranks kept
+                v = logits.gather(-1, top_i).masked_fill(~keep, float("-inf"))
+                v = torch.softmax(v, dim=-1) * keep
+                gates = torch.zeros_like(probs).scatter(-1, top_i, v)
+                fired = torch.zeros_like(probs).scatter(-1, top_i, keep.float())
+                frac = fired.flatten(0, 1).mean(0) / c.top_k
+                balance = n_routed * (frac * probs.flatten(0, 1).mean(0)).sum()
+                if c.n_shared:
+                    ones = gates.new_ones(*gates.shape[:-1], c.n_shared)
+                    gates, fired = torch.cat([ones, gates], -1), torch.cat([ones, fired], -1)
+                return gates, balance, fired, health
             top_i = choose.topk(c.top_k, dim=-1).indices
             # renormalised gates over the chosen modules. Softmax over just their logits, not probs.gather(...) / sum:
             # when the bias picks modules far below the top, their full-softmax probs underflow to 0 and 0/0 gave NaN
@@ -334,7 +366,10 @@ class BrainGPT(GPT):
         super().update_after_step(parts)  # depth routing thresholds, if any
         if "usage" in parts:
             self.update_balance(parts["usage"])
-        if not c.critic_gate or "critic_corr" not in parts:
+        if "judge_q" in parts:
+            q = parts["judge_q"].float()
+            self.judge_q.copy_(torch.where(self.gate_steps == 0, q, 0.98 * self.judge_q + 0.02 * q))
+        if not (c.critic_gate or c.judge) or "critic_corr" not in parts:
             return
         first = self.gate_steps == 0
         corr = parts["critic_corr"].float()
@@ -409,13 +444,19 @@ class BrainGPT(GPT):
             if i == c.trunk_layers:  # modules and memory read the trunk's output, in parallel
                 add = 0
                 if self.bank is not None:
-                    gates, balance, fired, (zloss, rlogit) = self.route(x)
+                    judged = None
+                    if c.judge:  # the judge sits in the shared module: run it first, its estimate steers routing
+                        shared_out, hs = self.shared(x, cos_m, sin_m)
+                        head = self.judge_head(norm(hs[0].detach())).float().view(*x.shape[:2], 2)
+                        err, logvar = head[..., 0], head[..., 1].clamp(-6, 6)
+                        judged = err.detach()
+                    gates, balance, fired, (zloss, rlogit) = self.route(x, judged)
                     if c.module_mode == "dense":
                         add = add + self.bank(x, cos_m, sin_m, gates)[0]
                     else:
                         S = c.n_shared
                         if self.shared is not None:
-                            add = add + self.shared(x, cos_m, sin_m)[0]
+                            add = add + (shared_out if c.judge else self.shared(x, cos_m, sin_m)[0])
                         routed, dropped = self.routed_bank(x, gates[..., S:], fired[..., S:], cos_m, sin_m)
                         add = add + routed
                     usage = fired.detach().flatten(0, 1).mean(0)
@@ -471,6 +512,8 @@ class BrainGPT(GPT):
             total = total + draft_weight * d_loss
             parts["draft"] = d_loss.detach()
         if err is not None and critic_weight:
+            if self.cfg.judge:  # the judge estimates the model's real (final) per-token loss
+                d_h = hidden[:, sel].flatten(0, 1)
             target = per_token_loss(d_h, self.wte.weight, d_y, self.cfg.logit_softcap, chunk)
             pred = err[:, sel].flatten()
             if logvar is not None:  # Gaussian NLL: it learns both the error and how sure it can be
@@ -485,6 +528,9 @@ class BrainGPT(GPT):
             parts["critic_corr"] = torch.corrcoef(torch.stack([pred.detach(), target]))[0, 1].nan_to_num(0.0)
             if self.cfg.critic_gate:
                 parts["critic_say"] = self.critic_say(None if logvar is None else logvar[:, sel]).mean()
+            if self.cfg.judge:
+                parts["judge_q"] = torch.quantile(pred.detach().float(), torch.tensor([1 / 3, 2 / 3], device=pred.device))
+                parts["judge_trust"] = self.trust.clone()
         if self.bank is not None:
             parts["usage"] = usage  # [E] share of tokens each module fired on; the bias balancer reads it
             if dropped is not None:
@@ -526,6 +572,8 @@ class BrainGPT(GPT):
             ps.append(self.router.weight)
         if self.critic is not None:
             ps.append(self.err_head.weight)
+        if getattr(self, "judge_head", None) is not None:
+            ps += [self.judge_head[0].weight, self.judge_head[2].weight]
         return ps
 
     def scalar_params(self):

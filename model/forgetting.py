@@ -249,6 +249,20 @@ def lost_at(curve, target):
     return None
 
 
+class Adapter(nn.Module):
+    """Standard bottleneck adapter (the parameter-efficient baseline): x + up(relu(down(norm(x)))), up at zero.
+    Same call signature as a grown ModuleBank, so it plugs into BrainGPT's grown_at slots."""
+
+    def __init__(self, d, r):
+        super().__init__()
+        self.down, self.up = nn.Linear(d, r, bias=False), nn.Linear(r, d, bias=False)
+        nn.init.zeros_(self.up.weight)
+
+    def forward(self, x, cos, sin, g):
+        h = self.up(torch.relu(self.down(nn.functional.rms_norm(x, (x.size(-1),)))))
+        return h * g[..., :1], None
+
+
 def continual(a):
     """Continued training by neurogenesis (the owner's design, 5 parts):
     1. small, frequent additions: the new material arrives in --stages parts; each grows --per_stage modules;
@@ -390,6 +404,26 @@ def continual(a):
 
     saved = {}
 
+    def add_adapters(stage):
+        """Baseline: adapters in every block, together as many parameters as per_stage grown modules."""
+        with torch.device("cuda"):
+            budget = sum(p.numel() for p in ModuleBank(cfg, a.per_stage, attention=True).parameters())
+        r = max(1, round(budget / (2 * cfg.d_model * len(model.blocks))))
+        params, keys = [], []
+        for b in range(len(model.blocks)):
+            key = f"{b}_{stage}"
+            with torch.device("cuda"):
+                ad, gate = Adapter(cfg.d_model, r), nn.Linear(cfg.d_model, 1)
+            with torch.no_grad():
+                nn.init.normal_(gate.weight, std=0.02)
+                nn.init.zeros_(gate.bias)
+            model.grown_at[key], model.grown_gates[key] = ad, gate
+            params += list(ad.parameters()) + list(gate.parameters())
+            keys.append(key)
+        print(f"  adapters r={r} in {len(keys)} blocks: {sum(p.numel() for p in params):,} params "
+              f"(grown-module budget {budget:,})", flush=True)
+        return params, keys
+
     def add_modules(depth, stage, k):
         key = f"{depth}_{stage}"
         with torch.device("cuda"):
@@ -422,6 +456,8 @@ def continual(a):
         seen.append(new)
         if not a.grow:  # standard baseline: fine-tune the whole model, same schedule (learn, then sleep)
             params, keys = [p for p in model.parameters()], []
+        elif a.adapter:  # standard baseline: new adapters each stage, same parameter budget and schedule
+            params, keys = add_adapters(st)
         elif a.stages == 1 and a.placement == "fixed":  # one-shot: per_stage modules spread over 3 depths
             params, keys = [], []
             for d in fixed[:3]:
@@ -456,7 +492,8 @@ def continual(a):
             for j in range(model.grown_gates[key].out_features):
                 if (key, j) in saved:
                     silence(key, [j], on=False)
-    res = dict(name=a.name, ckpt=a.ckpt, mode="continual", domains=a.domains, grow=a.grow, stages=a.stages,
+    res = dict(name=a.name, ckpt=a.ckpt, mode="continual", domains=a.domains, grow=a.grow, adapter=a.adapter,
+               stages=a.stages,
                per_stage=a.per_stage,
                placement=a.placement, init=a.init, consolidate_steps=a.consolidate_steps, overgrow=a.overgrow,
                stage_steps=a.stage_steps, layout=layout, curve=curve, pruned=pruned, audit=audit)
@@ -495,6 +532,7 @@ def main():
     ap.add_argument("--init", default="copy", choices=["copy", "copy_active", "fresh"],
                     help="continual: new module internals")
     ap.add_argument("--domains", default="", help="continual: comma list from data/<vocab>/domains, one stage each")
+    ap.add_argument("--adapter", type=int, default=0, help="continual: 1 = add bottleneck adapters instead (baseline)")
     ap.add_argument("--grow", type=int, default=1, help="continual: 0 = fine-tune the whole model instead (baseline)")
     ap.add_argument("--lr_full", type=float, default=3e-4, help="continual --grow 0: AdamW LR for the whole model")
     ap.add_argument("--sleep_new", type=float, default=0.5, help="continual: share of new material in sleep replay")
