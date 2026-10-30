@@ -73,6 +73,8 @@ def queues():
         "diag2": {f"d_{tag}": f"{sweep.scale_group('ec32k')['s_med_brain']} --stop_at 2600 {extra}"
                   for tag, extra in (("base", ""), ("z", "--router_z 0.001"), ("norevive", "--revive 0"),
                                      ("lr_half", "--lr_muon 0.025"))},
+        # the cause: biased top-k picked modules whose softmax probs underflowed, and gates = 0/0. d_fix = d_base + the fix
+        "diag3": {"d_fix": f"{sweep.scale_group('ec32k')['s_med_brain']} --stop_at 2600"},
         "diag": {f"{k}_{tag}": f"{v} {extra}" for k, v in sweep.scale_group("ec32k").items() if k == "s_med_brain"
                  for tag, extra in (("nofp8", "--fp8 0"), ("sigmoid", "--sigmoid_router 1"))},
         "h200base": pick(["b32k_plain8_t100m", "b32k_plain8_t100m_s7"]),
