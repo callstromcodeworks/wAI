@@ -397,3 +397,14 @@ new material is most conflicted relative to familiar text (smoke: Haskell -> dep
 C (10 specialties): cued recall, the model continues 32-token fragments of real old text (temperature 1.0 and
 0.7) instead of free sampling. D (starts when A ends): neurogenesis vs full fine-tuning on the fixed medium brain
 (230M, depths 2,6,10). Rental disk 83 -> 62% (17 verified checkpoints removed).
+
+### Tokenization diagnostics (tokenization_diag.py; medium plain 32k vs 64k vocabulary, same text)
+Fragmentation (32k): prose specialties split no more than general English (words in 2+ tokens: philosophy 12.6%,
+logic 12.5%, law 10.8%, medical 15.1%, general English 13.4%; code languages 12-17%); loss sits ~3/4 on whole
+words in all prose, as in general English (continuation pieces 5-7%; code ~17-21%). Split words cost ~2.3x a whole
+word everywhere. Same text, 64k gain over 32k: general English +1.0%, philosophy +1.5, law +1.5, medical +1.9,
+logic +0.7, space +1.8, music +1.5, Haskell +2.6, Fortran/Lua +1.9, Rust +0.2, general code +0.1. Tokenization
+explains a real but small part (~15% of philosophy's gap over general English); with the register and loss-split
+results, most of the prose difficulty is understanding (meaning), not spelling or word choice.
+Credit: $70 left at 8:35 AM Central (13:35 UTC) Oct 30 at $4.028/h -> ~2 AM Central Oct 31; keeper final pull
+moved to 10 PM Central (03:00 UTC Oct 31), no new work after 9 PM Central.
