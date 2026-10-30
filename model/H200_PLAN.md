@@ -291,3 +291,17 @@ growth), medium more than small, independent of FP8, and the sigmoid router (bou
 Fix (wAI 87400b6): gates = softmax over the chosen modules' logits (identical in exact math, 1e-7 in practice);
 regression test fails on the old code. Running d_fix (= d_base + fix) to step 2600; d_norevive (no bias, so
 immune to the bug) should also survive while d_z (z-loss, still biased) fails.
+Confirmed: d_fix and d_z ran to 2600 with zero skipped steps (d_base, identical but unfixed, diverged at 1523).
+At 2600: d_fix 1.0130, d_z 1.0126, d_norevive 1.0127 (but 30% of routed tokens dropped), d_lr_half 1.0154,
+plain 1.0181.
+
+### s_med_brain_fix (230M, routed bank, fix; resumed from d_fix at 2600): 0.8522 mix bpb vs s_med_plain 0.8587
+English 0.9966 vs 1.0023, code 0.6358 vs 0.6434: the bank is 0.8% better at equal tokens (more parameters than
+plain, about the same compute per token), zero skipped steps in 11,445. (Plain with the 64k vocabulary: 0.8489.)
+
+### The judge (owner's design: one judging module beside the others, not a judge per module)
+The shared module gets a head (on detached features) estimating each token's final loss and its uncertainty;
+once its track record earns trust, the estimate sets each token's routed-module count (easiest third 1, middle 2,
+hardest 3, same average; cut-offs are running averages, so causal). judge queue at 100M tokens vs the same bank
+without a judge (b32k_sparseB32c2_t100m, 2 seeds): j_alloc (2 seeds), j_only (no allocation), j_random (random
+allocation).
