@@ -91,6 +91,13 @@ def queues():
                                        ("j2_random", "--judge 3 --gate_lo 0.15 --gate_hi 0.35"),
                                        ("j2_surprise", "--judge 2 --judge_surprise 1 --gate_lo 0.15 --gate_hi 0.35"),
                                        ("c_bank_rerun", ""))},
+        # judge round 3, the owner's aim: cognitive dissonance. The judge anticipates conflict between the model's first
+        # impression and its considered view (no answer needed) and sees its surprise at new evidence; anticipated
+        # conflict brings in the router's next-choice module (an alternative view). Compare j2_surprise (error target)
+        "judge3": {name: f"{sweep.brain_group('ec32k')['b32k_sparseB32c2_t100m']} --judge 2 --judge_target dissonance "
+                         f"--gate_lo 0.15 --gate_hi 0.35 {extra}"
+                   for name, extra in (("j3_dissonance", "--judge_surprise 1"), ("j3_dissonance_s7", "--judge_surprise 1 --seed 7"),
+                                       ("j3_dissonance_nosurprise", ""))},
         "diag": {f"{k}_{tag}": f"{v} {extra}" for k, v in sweep.scale_group("ec32k").items() if k == "s_med_brain"
                  for tag, extra in (("nofp8", "--fp8 0"), ("sigmoid", "--sigmoid_router 1"))},
         "h200base": pick(["b32k_plain8_t100m", "b32k_plain8_t100m_s7"]),

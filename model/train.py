@@ -333,6 +333,8 @@ def parse_args():
     ap.add_argument("--revive", type=float, default=0.0, help="brain: router bias step for dead modules (0 = off)")
     ap.add_argument("--judge", type=int, default=0,
                     help="brain: one judging module (1 judge only, 2 its estimate allocates modules per token, 3 random)")
+    ap.add_argument("--judge_target", default="error", choices=["error", "dissonance"],
+                    help="brain: the judge anticipates the real loss, or the conflict between its first and final view")
     ap.add_argument("--judge_surprise", type=int, default=0, help="brain: the judge also sees each token's surprise")
     ap.add_argument("--router_z", type=float, default=0.0, help="brain: router z-loss weight (bounds router logits)")
     ap.add_argument("--sigmoid_router", type=int, default=0, help="brain: bounded sigmoid router scores (for --balance_bias)")
@@ -428,7 +430,7 @@ def main():
             cfg = BrainConfig(**common, **{k: getattr(args, k) for k in (
                 "trunk_layers", "gate_layers", "n_modules", "module_dim", "module_layers", "module_heads",
                 "module_kv_heads", "top_k", "n_shared", "memory_sub", "memory_k", "balance_bias", "critic_gate",
-                "gate_lo", "gate_hi", "gate_observe_steps", "module_mode", "capacity", "revive", "router_z", "judge")}, judge_surprise=bool(args.judge_surprise), critic=bool(args.critic),
+                "gate_lo", "gate_hi", "gate_observe_steps", "module_mode", "capacity", "revive", "router_z", "judge")}, judge_surprise=bool(args.judge_surprise), judge_target=args.judge_target, critic=bool(args.critic),
                 critic_detach=bool(args.critic_detach), sigmoid_router=bool(args.sigmoid_router))
         else:
             cfg = GPTConfig(**common)
