@@ -359,3 +359,14 @@ learned / English lost / code lost / lost per unit learned (mean +/- sd):
 Sleep is the key part; the old share in sleep is a smooth dial (each step halves forgetting for <=6% of
 learning); at 90% old, forgetting per unit learned is 27x below full fine-tuning. Full fine-tuning still learns
 1.6x more in absolute terms.
+
+### Direct register probe (register_probe.py; 12 hand-written formal/casual context pairs, same-meaning word pairs)
+Mean register shift (log-odds of formal vs casual word, formal context minus casual context): small plain 1B
++4.06 nats (58x odds, 11/12 right way), small bank 1B +4.42 (83x, 12/12), medium plain +4.82 (124x, 12/12),
+medium bank fixed +2.80 (16x, 11/12; driven by 2 items), medium plain ec64k +4.81 (122x, 12/12). Matching word
+preferred in 17/24 contexts for every model: casual contexts always pick the casual word (12/12); formal contexts
+still pick the commoner word for assist, approximately, commence, inquire, "Good morning" (frequency beats
+register at the formal end; consistent with the owner's point that even the formal training text uses the common
+words). Register is represented even at 110M; with the loss split (word choice ~12% everywhere, prose difficulty
+mostly meaning), an explicit register gate is unlikely to fix the prose weakness at this scale; next for prose:
+content capacity per stage.
