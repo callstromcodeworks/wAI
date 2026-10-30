@@ -262,3 +262,16 @@ FP8; the only stable variant was the one without working routing, which points (
 updates at medium width. Next, locally: log router logit and per-module output norms near the blow-up, and try
 router z-loss / lower bank learning rate / gradient clipping on the bank. Rental GPU idle from 00:40; no new
 work. Final export + pull at 02:00 UTC.
+
+### Neurogenesis round 6: long-standing continued training (6 stages x 2 modules, 1,3,5,1,3,5; sleep 200)
+| run | learned | English lost | code lost | by stage (docs) |
+|---|---:|---:|---:|---|
+| Z6_old90 | 0.0788 | +0.0002 | +0.0009 | 1.018 1.008 0.998 0.988 0.985 0.982 |
+| Z6_old75 | 0.0776 | +0.0008 | +0.0025 | 1.015 1.007 1.002 0.989 0.985 0.983 |
+Forgetting does not pile up: with 90%-old sleep it stays at +0.0002 English and creeps on code to +0.0009 by
+stage 4, then flat through 12 modules. Learning is lower than 3 x 2 (0.092): each stage sees a sixth of the
+material, and stages 5-6 add only ~0.003 each; the audit shows their modules hold almost nothing (removing one
+costs 0.000-0.003). Useless late modules are exactly what survival-by-usefulness pruning should remove
+(round 2's prune test was at fixed size; here it would shrink the model for free). Takeaway for the owner's
+design: frequent small additions are safe indefinitely with old-memory sleep; how much each addition learns
+depends on how much genuinely new material it gets.
