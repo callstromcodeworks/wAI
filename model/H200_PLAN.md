@@ -348,3 +348,14 @@ gate could touch only a small slice at this scale. Caveats: embedding groups are
 with small/large, "casual" with "raw"); register may act across a passage, not per token; a 110M model may not
 represent register yet. Not building the register-gated module for now; possible direct probe: formal vs casual
 contexts and the model's hello/hi, therefore/so preference.
+
+### Neurogenesis replicates (3 seeds each, local 4070; crawl docs, 3 stages x 2 modules, 400 + 200 steps)
+learned / English lost / code lost / lost per unit learned (mean +/- sd):
+- full fine-tune + 25% replay, 1800 steps: 0.153+/-0.001 / +0.0184 / +0.0226 / 0.134
+- neurogenesis, no sleep (600 + 0):        0.067+/-0.010 / +0.0030 / +0.0103 / 0.101
+- sleep 50% old:                           0.097+/-0.002 / +0.0012 / +0.0034 / 0.024
+- sleep 75% old:                           0.097+/-0.001 / +0.0005 / +0.0017 / 0.012
+- sleep 90% old:                           0.091+/-0.002 / +0.0002 / +0.0007 / 0.005
+Sleep is the key part; the old share in sleep is a smooth dial (each step halves forgetting for <=6% of
+learning); at 90% old, forgetting per unit learned is 27x below full fine-tuning. Full fine-tuning still learns
+1.6x more in absolute terms.
