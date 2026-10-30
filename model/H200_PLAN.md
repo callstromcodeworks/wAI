@@ -336,3 +336,15 @@ rust worse). Neurogenesis learns code languages as well or better with ~zero for
 prose specialties. Replay of the model's own samples (recall, temperature 1) degraded everything (English +0.037,
 code +0.053 by stage 4): a 110M model's free samples are poor text; stopped. Next form: cued recall (replay
 prompted by real fragments).
+
+### Owner's idea: meaning first, word choice gated by register/impact. Diagnostic (register_diag.py)
+Loss split exactly into meaning (group of near-synonyms, k-means on the model's output embeddings) and word choice
+within the group, base 1B bank model, 200k tokens per text type. At 4096 groups word choice is a near-constant
+~12% of the loss for every text type (general English 12.0%, philosophy 12.1, logic 12.1, law 12.2, medical
+11.5, code languages 10-12%); 1024 and 8192 groups show the same uniformity (20-23%, 8-10%). The prose
+specialties' extra difficulty over general English is mostly meaning (philosophy +0.027 of +0.032 bpb, logic
++0.034 of +0.041). So the prose weakness in neurogenesis looks like missing content, not word choice; a register
+gate could touch only a small slice at this scale. Caveats: embedding groups are crude (role-based: "big" groups
+with small/large, "casual" with "raw"); register may act across a passage, not per token; a 110M model may not
+represent register yet. Not building the register-gated module for now; possible direct probe: formal vs casual
+contexts and the model's hello/hi, therefore/so preference.
