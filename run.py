@@ -98,6 +98,12 @@ def queues():
                          f"--gate_lo 0.15 --gate_hi 0.35 {extra}"
                    for name, extra in (("j3_dissonance", "--judge_surprise 1"), ("j3_dissonance_s7", "--judge_surprise 1 --seed 7"),
                                        ("j3_dissonance_nosurprise", ""))},
+        # the decisive judge test at 1B tokens (100M runs have ~0.005 noise): dissonance judge vs the same bank, 2 seeds
+        # each, both on today's code
+        "judge1b": {name: f"{sweep.brain_group('ec32k')['b32k_sparseB32c2_t1b']} {extra}"
+                    for name, extra in (("j1b_dissonance", "--judge 2 --judge_target dissonance --judge_surprise 1 --gate_lo 0.15 --gate_hi 0.35"),
+                                        ("j1b_dissonance_s7", "--judge 2 --judge_target dissonance --judge_surprise 1 --gate_lo 0.15 --gate_hi 0.35 --seed 7"),
+                                        ("j1b_bank", ""), ("j1b_bank_s7", "--seed 7"))},
         "diag": {f"{k}_{tag}": f"{v} {extra}" for k, v in sweep.scale_group("ec32k").items() if k == "s_med_brain"
                  for tag, extra in (("nofp8", "--fp8 0"), ("sigmoid", "--sigmoid_router 1"))},
         "h200base": pick(["b32k_plain8_t100m", "b32k_plain8_t100m_s7"]),
