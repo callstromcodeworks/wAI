@@ -68,6 +68,11 @@ def queues():
         "memory2": sweep.memory2_group("ec32k"),
         "scale": sweep.scale_group("ec32k"),
         # medium brain diverged at step 1660 (same seed reproduces it): does FP8 or the unbounded router cause it?
+        # same seed and schedule as s_med_brain, all instrumented (router max logit, bank/stream rms, grad norm),
+        # stopped at step 2600 (it diverged at 1660): which change keeps the medium bank stable?
+        "diag2": {f"d_{tag}": f"{sweep.scale_group('ec32k')['s_med_brain']} --stop_at 2600 {extra}"
+                  for tag, extra in (("base", ""), ("z", "--router_z 0.001"), ("norevive", "--revive 0"),
+                                     ("lr_half", "--lr_muon 0.025"))},
         "diag": {f"{k}_{tag}": f"{v} {extra}" for k, v in sweep.scale_group("ec32k").items() if k == "s_med_brain"
                  for tag, extra in (("nofp8", "--fp8 0"), ("sigmoid", "--sigmoid_router 1"))},
         "h200base": pick(["b32k_plain8_t100m", "b32k_plain8_t100m_s7"]),
@@ -96,7 +101,7 @@ def run_state(name):
     text = open(out, errors="replace").read() if os.path.exists(out) else ""
     if re.search(r"loss nan|bpb nan|non-finite|diverged", text, re.I):
         return "DIVERGED"
-    if re.search(r"^done:", text, re.M):
+    if re.search(r"^done:|^stopped at step", text, re.M):
         return "done"
     return "partial" if os.path.exists(os.path.join(run_dir(name), "ckpt.pt")) else "new"
 

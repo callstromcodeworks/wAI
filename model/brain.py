@@ -67,6 +67,7 @@ class BrainConfig(GPTConfig):
     module_kv_heads: int = 2
     top_k: int = 2            # routed modules that fire per token; 0 = all, softmax-weighted (dense)
     n_shared: int = 0         # modules (the first n) that fire on every token; the rest are routed
+    router_z: float = 0.0  # weight of the router z-loss (mean squared logsumexp of router logits); 0 = off
     sigmoid_router: bool = False  # router scores are sigmoids (bounded, for bias balancing), not softmax
     memory_sub: int = 128     # sub-keys per half: memory_sub ** 2 slots; 0 = no memory
     memory_dim: int = 256     # query size
@@ -281,6 +282,7 @@ class BrainGPT(GPT):
         load-balancing loss over the routed modules, and which modules fired."""
         c = self.cfg
         logits = self.router(norm(x)).float()
+        health = (torch.logsumexp(logits, -1).square().mean(), logits.detach().abs().amax())
         if c.sigmoid_router:
             scores = torch.sigmoid(logits)
             probs = scores / scores.sum(-1, keepdim=True)
@@ -300,7 +302,7 @@ class BrainGPT(GPT):
         if c.n_shared:
             ones = gates.new_ones(*gates.shape[:-1], c.n_shared)
             gates, fired = torch.cat([ones, gates], -1), torch.cat([ones, fired], -1)
-        return gates, balance, fired
+        return gates, balance, fired, health
 
     @torch.no_grad()
     def update_balance(self, usage):
@@ -394,12 +396,13 @@ class BrainGPT(GPT):
         L = len(self.blocks)
         skips, draft, err, logvar, balance = [], None, None, None, x.new_zeros((), dtype=torch.float32)
         dropped = None
+        zloss = rlogit = bank_rms = x.new_zeros((), dtype=torch.float32)
         usage = x.new_zeros(max(1, c.n_modules), dtype=torch.float32)
         for i, block in enumerate(self.blocks):
             if i == c.trunk_layers:  # modules and memory read the trunk's output, in parallel
                 add = 0
                 if self.bank is not None:
-                    gates, balance, fired = self.route(x)
+                    gates, balance, fired, (zloss, rlogit) = self.route(x)
                     if c.module_mode == "dense":
                         add = add + self.bank(x, cos_m, sin_m, gates)[0]
                     else:
@@ -414,6 +417,8 @@ class BrainGPT(GPT):
                 if getattr(self, "grown", None) is not None:  # modules added later (forgetting.py grow)
                     g = torch.sigmoid(self.grown_gate(norm(x)).float())                  # [B, T, k]
                     add = add + self.grown(x, cos_m, sin_m, g.to(x.dtype))[0]
+                if torch.is_tensor(add):
+                    bank_rms = add.detach().float().square().mean().sqrt()
                 x = x + add
             if i == L - c.gate_layers:
                 draft = x
@@ -441,13 +446,14 @@ class BrainGPT(GPT):
         out = norm(x).bfloat16()
         if not self.training:
             return out
-        return out, norm(draft).bfloat16(), err, balance, usage, logvar, dropped
+        stats = (zloss, rlogit, bank_rms, x.detach().float().square().mean().sqrt())  # router/bank/stream health
+        return out, norm(draft).bfloat16(), err, balance, usage, logvar, dropped, stats
 
     def train_loss(self, out, targets, chunk=2048, draft_weight=0.1, critic_weight=0.1, balance_weight=0.01,
                    stride=8, offset=0):
         """Main next-token loss plus the auxiliaries. The draft and critic losses use every
         stride-th position (from offset), which keeps their extra LM-head work to 1/stride."""
-        hidden, draft, err, balance, usage, logvar, dropped = out
+        hidden, draft, err, balance, usage, logvar, dropped, (zloss, rlogit, bank_rms, resid_rms) = out
         main = self.loss(hidden, targets, chunk)
         parts = {"main": main.detach()}
         total = main
@@ -479,6 +485,10 @@ class BrainGPT(GPT):
             if balance_weight:
                 total = total + balance_weight * balance
                 parts["balance"] = balance.detach()
+            if self.cfg.router_z:
+                total = total + self.cfg.router_z * zloss
+            parts["router_lse2"], parts["router_max"] = zloss.detach(), rlogit
+            parts["bank_rms"], parts["resid_rms"] = bank_rms, resid_rms
         return total, parts
 
     # ---- optimizer groups and accounting -----------------------------------

@@ -331,6 +331,7 @@ def parse_args():
                          "attend only over their own tokens; ffn = routed modules are feed-forward, on their tokens")
     ap.add_argument("--capacity", type=float, default=1.25, help="brain sparse modes: slots per module vs its fair share")
     ap.add_argument("--revive", type=float, default=0.0, help="brain: router bias step for dead modules (0 = off)")
+    ap.add_argument("--router_z", type=float, default=0.0, help="brain: router z-loss weight (bounds router logits)")
     ap.add_argument("--sigmoid_router", type=int, default=0, help="brain: bounded sigmoid router scores (for --balance_bias)")
     ap.add_argument("--memory_sub", type=int, default=128, help="brain: memory sub-keys per half (slots = sub^2; 0 = none)")
     ap.add_argument("--memory_k", type=int, default=16, help="brain: memory slots read per token")
@@ -368,6 +369,7 @@ def parse_args():
     ap.add_argument("--eval_every", type=int, default=250)
     ap.add_argument("--eval_bytes", type=int, default=4_000_000, help="validation text per source (bytes)")
     ap.add_argument("--save_every", type=int, default=500)
+    ap.add_argument("--stop_at", type=int, default=0, help="stop (eval + save) at this step, keeping the full schedule")
     ap.add_argument("--log_every", type=int, default=10)
     ap.add_argument("--seed", type=int, default=1337)
     ap.add_argument("--mem_guard_mb", type=int, default=256, help="VRAM to leave free (0 disables the cap)")
@@ -423,7 +425,7 @@ def main():
             cfg = BrainConfig(**common, **{k: getattr(args, k) for k in (
                 "trunk_layers", "gate_layers", "n_modules", "module_dim", "module_layers", "module_heads",
                 "module_kv_heads", "top_k", "n_shared", "memory_sub", "memory_k", "balance_bias", "critic_gate",
-                "gate_lo", "gate_hi", "gate_observe_steps", "module_mode", "capacity", "revive")}, critic=bool(args.critic),
+                "gate_lo", "gate_hi", "gate_observe_steps", "module_mode", "capacity", "revive", "router_z")}, critic=bool(args.critic),
                 critic_detach=bool(args.critic_detach), sigmoid_router=bool(args.sigmoid_router))
         else:
             cfg = GPTConfig(**common)
@@ -504,7 +506,7 @@ def main():
     train_time = 0.0  # wall time spent in training steps (excludes eval and checkpoints)
     bad_steps = 0  # consecutive skipped steps (non-finite loss or gradient)
     params = [p for p in model.parameters() if p.requires_grad]
-    while total_steps is None or step < total_steps:
+    while (total_steps is None or step < total_steps) and not (args.stop_at and step >= args.stop_at):
         t_step = time.perf_counter()
         mult = lr_multiplier(step, total_steps or 10**9, args.warmup_steps, args.cooldown_frac)
         for g in muon.param_groups:
@@ -539,6 +541,7 @@ def main():
             continue
         bad_steps = 0
         loss_acc += step_main
+        step_parts["grad_norm"] = gnorm  # sum of per-tensor gradient norms: watch for growth before trouble
         for k, v in step_parts.items():
             parts_acc[k] = parts_acc.get(k, 0) + v
         muon.step()
@@ -592,9 +595,14 @@ def main():
         if step % args.eval_every == 0 or step == total_steps:
             run_eval()
             t_log = time.perf_counter()
-        if step % args.save_every == 0 or step == total_steps:
+        if step % args.save_every == 0 or step == total_steps or step == args.stop_at:
             save()
             t_log = time.perf_counter()
+        if step == args.stop_at:
+            if step % args.eval_every:
+                run_eval()
+            print(f"stopped at step {step} (--stop_at)", flush=True)
+            break
     print(f"done: {step} steps, {tokens_seen / 1e9:.3f}B tokens in {(time.perf_counter() - train_start) / 3600:.2f} h")
 
 
