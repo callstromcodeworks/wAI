@@ -323,3 +323,16 @@ run-to-run noise ~0.005 at this size (today's code changes shift numerics; runs 
 round 1's +0.003 was noise. j2_alloc (error judge, trust reached 0.97) 1.1488, j2_random 1.1471, j2_surprise
 1.1517: no difference from random allocation resolvable at 100M tokens. 100M is a screen only; anything promising
 goes to 1B tokens with 2-3 seeds.
+Judge round 3 (100M): the dissonance judge anticipates the model's own conflict at corr ~0.68 and earns full
+trust, but its allocation (+/- one routed module per token) is not distinguishable from noise: j3 1.1490/1.1459,
+without surprise 1.1506, vs controls 1.1405-1.1475 and random allocation 1.1471. Decisive test at 1B tokens
+(judge1b: dissonance judge vs bank, 2 seeds each, today's code), started 09:00.
+
+### 10-specialty benchmark, interim (7 of 10 stages; change from start, negative = better)
+neurogenesis (sleep 90% old): Haskell -0.088, Lua -0.070, Fortran -0.033, philosophy/logic/medical/law -0.001 to
+-0.003; English +0.0000, code +0.0016. Full fine-tune: Haskell -0.077, Lua -0.045, Fortran -0.037, philosophy
+-0.008, logic -0.020, but English +0.015, code +0.043, and later specialties damage earlier ones (law, music,
+rust worse). Neurogenesis learns code languages as well or better with ~zero forgetting, but barely moves the
+prose specialties. Replay of the model's own samples (recall, temperature 1) degraded everything (English +0.037,
+code +0.053 by stage 4): a 110M model's free samples are poor text; stopped. Next form: cued recall (replay
+prompted by real fragments).
