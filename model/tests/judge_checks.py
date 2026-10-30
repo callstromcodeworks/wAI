@@ -83,3 +83,31 @@ for i in range(150):
                           "judge_q": torch.tensor([1.0, 2.0], device="cuda"), "usage": torch.full((9,), 0.25, device="cuda")})
 ok(m2.trust.item() == 1.0 and abs(m2.judge_q[0].item() - 1.0) < 1e-5, "trust earned after observing; cut-offs tracked",
    f"trust {m2.trust.item():.2f}, cut-offs {[round(v, 2) for v in m2.judge_q.tolist()]}")
+
+# with the surprise input: still causal, still no gradient into the shared module, and surprise is real
+with torch.device("cuda"):
+    ms = BrainGPT(BrainConfig(**{**base, "judge_surprise": True}))
+ms.trust.fill_(1.0)
+with torch.no_grad(), torch.autocast("cuda", torch.bfloat16):
+    ms.judge_head[2].weight.normal_(std=0.5)
+    err = ms(x)[2]
+    ms.judge_q.copy_(torch.quantile(err.float().flatten(), torch.tensor([1 / 3, 2 / 3], device="cuda")))
+ms.zero_grad()
+with torch.autocast("cuda", torch.bfloat16):
+    o = ms(x)
+    ((o[2].float() - 1).square().mean() + o[5].float().mean()).backward()
+g_shared = sum(p.grad.abs().sum().item() for p in ms.shared.parameters() if p.grad is not None)
+ok(g_shared == 0, "surprise: judge loss still trains nothing outside its head", f"{g_shared:.2e}")
+with torch.no_grad():
+    sp = ms.surprise(torch.randn(2, 128, 384, device="cuda"), x)
+ok(sp[:, 0].abs().max().item() == 0 and sp[:, 1:].min().item() > 0, "surprise: 0 at the first token, positive after",
+   f"mean {sp[:, 1:].mean().item() * 10:.2f} nats")
+ms.eval()
+with torch.no_grad(), torch.autocast("cuda", torch.bfloat16):
+    a = ms(x).float()
+    worst = 0.0
+    for t in (5, 64, 127):
+        x2 = x.clone()
+        x2[:, t] = (x2[:, t] + 1) % 32763
+        worst = max(worst, (a[:, :t] - ms(x2).float()[:, :t]).abs().max().item())
+ok(worst == 0.0, "surprise: causal with allocation (changing token t leaves earlier positions unchanged)", f"{worst:.2e}")
