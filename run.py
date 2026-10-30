@@ -75,6 +75,8 @@ def queues():
                                      ("lr_half", "--lr_muon 0.025"))},
         # the cause: biased top-k picked modules whose softmax probs underflowed, and gates = 0/0. d_fix = d_base + the fix
         "diag3": {"d_fix": f"{sweep.scale_group('ec32k')['s_med_brain']} --stop_at 2600"},
+        # s_med_brain with the gate fix, resumed from d_fix's step-2600 checkpoint (identical config and schedule)
+        "scale2": {"s_med_brain_fix": sweep.scale_group("ec32k")["s_med_brain"]},
         "diag": {f"{k}_{tag}": f"{v} {extra}" for k, v in sweep.scale_group("ec32k").items() if k == "s_med_brain"
                  for tag, extra in (("nofp8", "--fp8 0"), ("sigmoid", "--sigmoid_router 1"))},
         "h200base": pick(["b32k_plain8_t100m", "b32k_plain8_t100m_s7"]),
