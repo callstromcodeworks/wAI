@@ -580,7 +580,7 @@ def main():
             tps = steps_since_log * tokens_per_step / dt
             mem = torch.cuda.max_memory_allocated() / 2**30
             aux = {k: (v / steps_since_log).tolist() for k, v in parts_acc.items() if k != "main"}
-            aux_txt = "".join(f" | {k} {v:.3f}" for k, v in aux.items() if k != "usage")
+            aux_txt = "".join(f" | {k} {v:.3f}" for k, v in aux.items() if not isinstance(v, list))  # lists: json only
             if "usage" in aux:
                 aux_txt += f" | modules fire {min(aux['usage']):.0%}-{max(aux['usage']):.0%} of tokens"
             if hasattr(model, "depth_stats"):

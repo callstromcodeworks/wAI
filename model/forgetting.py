@@ -300,6 +300,29 @@ def continual(a):
     token_bytes = torch.from_numpy(token_byte_lengths(VOCABS[vocab], model.cfg.vocab_size)).cuda()
     rng = np.random.default_rng(a.seed)
 
+    @torch.no_grad()
+    def recall(n_seq, batch=64):
+        """The model's own memories: n_seq sequences of T + 1 tokens sampled from it (temperature 1, starting
+        from a document boundary), before anything new is learned. Brains replay reconstructions, not records."""
+        eot = Tokenizer(VOCABS[vocab]).eot
+        model.eval()
+        gen = torch.Generator(device="cuda").manual_seed(a.seed)
+        out = []
+        for i in range(0, n_seq, batch):
+            ids = torch.full((min(batch, n_seq - i), 1), eot, dtype=torch.long, device="cuda")
+            for _ in range(T):
+                with torch.autocast("cuda", torch.bfloat16), sdpa_kernel(SDPA_BACKENDS, set_priority=True):
+                    h = model(ids)[:, -1]
+                nxt = torch.multinomial(torch.softmax(model.logits(h), -1), 1, generator=gen)
+                ids = torch.cat([ids, nxt], 1)
+            out.append(ids.cpu().numpy())
+            print(f"  recalled {i + len(ids)}/{n_seq} sequences", flush=True)
+        model.train()
+        return np.concatenate(out).astype(np.uint16).reshape(-1)  # one stream; windows may span sequences
+
+    if a.replay_source == "recall":  # old material comes only from the model's own memories, wake and sleep
+        general = [recall(a.recall_seqs)]
+
     def evaluate(tag):
         r = dict(tag=tag, **{k: score(model, v, token_bytes) for k, v in vals.items()},
                  **{k: score(model, v, token_bytes) for k, v in keep.items()})
@@ -317,7 +340,7 @@ def continual(a):
             if rng.random() < new_share:
                 rows.append(window(new_sources[rng.integers(len(new_sources))]))
             else:
-                rows.append(window(general[0] if rng.random() < 0.6 else general[1]))
+                rows.append(window(general[0] if len(general) == 1 or rng.random() < 0.6 else general[1]))
         return torch.from_numpy(np.stack(rows).astype(np.int64)).cuda()
 
     def train(params, steps, new_sources, new_share, lr):
@@ -493,6 +516,7 @@ def continual(a):
                 if (key, j) in saved:
                     silence(key, [j], on=False)
     res = dict(name=a.name, ckpt=a.ckpt, mode="continual", domains=a.domains, grow=a.grow, adapter=a.adapter,
+               replay_source=a.replay_source,
                stages=a.stages,
                per_stage=a.per_stage,
                placement=a.placement, init=a.init, consolidate_steps=a.consolidate_steps, overgrow=a.overgrow,
@@ -532,6 +556,9 @@ def main():
     ap.add_argument("--init", default="copy", choices=["copy", "copy_active", "fresh"],
                     help="continual: new module internals")
     ap.add_argument("--domains", default="", help="continual: comma list from data/<vocab>/domains, one stage each")
+    ap.add_argument("--replay_source", default="data", choices=["data", "recall"],
+                    help="continual: old material for replay: stored text, or the model's own samples")
+    ap.add_argument("--recall_seqs", type=int, default=512, help="continual, recall: sequences sampled before learning")
     ap.add_argument("--adapter", type=int, default=0, help="continual: 1 = add bottleneck adapters instead (baseline)")
     ap.add_argument("--grow", type=int, default=1, help="continual: 0 = fine-tune the whole model instead (baseline)")
     ap.add_argument("--lr_full", type=float, default=3e-4, help="continual --grow 0: AdamW LR for the whole model")
