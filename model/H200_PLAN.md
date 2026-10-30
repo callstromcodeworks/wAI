@@ -275,3 +275,19 @@ costs 0.000-0.003). Useless late modules are exactly what survival-by-usefulness
 (round 2's prune test was at fixed size; here it would shrink the model for free). Takeaway for the owner's
 design: frequent small additions are safe indefinitely with old-memory sleep; how much each addition learns
 depends on how much genuinely new material it gets.
+
+## Rental, second $100 (from 02:10 UTC Oct 30; est. $0 ~06:30 UTC Oct 31; final pull 02:00 UTC Oct 31)
+Pulls now go to D:\Claude\worksAI_runs\h200. Rental disk: removed 35 checkpoints whose safetensors were verified
+home (83 -> 50 GB used).
+
+### Medium bank divergence: cause found
+diag2 (s_med_brain's seed and schedule, instrumented, stop at 2600): d_base diverged at 1523 (guard stopped it
+at 1535); residual rms climbed ~150 (step 200) -> 10k (1520) in every full-LR variant, 8x slower at half LR.
+But finished plain medium models have residual rms up to 190k and trained fine, so growth is not the cause.
+Cause, in BrainGPT.route: with a router bias (revive), top-k by score + bias can pick modules whose full-softmax
+probability underflows to 0 in float32 once router logits spread past ~100 (router max logit was 108-120 at
+each failure); the renormalised gates probs.gather / sum were then 0/0 = NaN. Explains: late onset (logit
+growth), medium more than small, independent of FP8, and the sigmoid router (bounded) never failing.
+Fix (wAI 87400b6): gates = softmax over the chosen modules' logits (identical in exact math, 1e-7 in practice);
+regression test fails on the old code. Running d_fix (= d_base + fix) to step 2600; d_norevive (no bias, so
+immune to the bug) should also survive while d_z (z-loss, still biased) fails.
