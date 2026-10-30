@@ -292,8 +292,15 @@ class BrainGPT(GPT):
         if c.top_k:
             choose = scores + self.route_bias if (c.balance_bias or c.revive) else scores
             top_i = choose.topk(c.top_k, dim=-1).indices
-            top_v = probs.gather(-1, top_i)
-            gates = torch.zeros_like(probs).scatter(-1, top_i, top_v / top_v.sum(-1, keepdim=True))
+            # renormalised gates over the chosen modules. Softmax over just their logits, not probs.gather(...) / sum:
+            # when the bias picks modules far below the top, their full-softmax probs underflow to 0 and 0/0 gave NaN
+            # (the medium bank's divergence once router logits spread past ~100)
+            if c.sigmoid_router:
+                top_v = scores.gather(-1, top_i)
+                top_v = top_v / top_v.sum(-1, keepdim=True).clamp_min(1e-20)
+            else:
+                top_v = torch.softmax(logits.gather(-1, top_i), dim=-1)
+            gates = torch.zeros_like(probs).scatter(-1, top_i, top_v)
             fired = torch.zeros_like(probs).scatter(-1, top_i, 1.0)
         else:
             gates, fired = probs, torch.ones_like(probs)

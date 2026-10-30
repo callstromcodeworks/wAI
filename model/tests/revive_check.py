@@ -36,3 +36,13 @@ ok(parts["usage"][8].item() == 1.0, "a large bias routes every token to the revi
 with torch.device("cuda"):
     m0 = BrainGPT(BrainConfig(**{**base, "revive": 0.0}))
 ok(not hasattr(m0, "route_bias"), "revive off: no router bias, routing unchanged")
+# regression: the bias picks modules whose full-softmax probability underflows to 0 (router logits spread > ~100).
+# The old gates were probs.gather / sum = 0/0 = NaN, which diverged the medium bank runs.
+with torch.no_grad():
+    m.router.weight.zero_()
+    m.router.weight[0] = 1.0                # module 0's logit = sum of the normed input: huge for an all-ones input
+m.route_bias[:] = 0; m.route_bias[6] = m.route_bias[7] = 1e4   # but the bias forces modules 6 and 7
+gates, _, fired, _ = m.route(torch.ones(1, 4, 384, device="cuda"))
+ok(torch.isfinite(gates).all().item() and abs(gates[..., 1:].sum(-1) - 1).max().item() < 1e-5,
+   "gates stay finite and sum to 1 when the chosen modules' probabilities underflow",
+   f"chosen {fired[0, 0].nonzero().flatten().tolist()}")
