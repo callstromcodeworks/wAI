@@ -104,6 +104,11 @@ def queues():
                     for name, extra in (("j1b_dissonance", "--judge 2 --judge_target dissonance --judge_surprise 1 --gate_lo 0.15 --gate_hi 0.35"),
                                         ("j1b_dissonance_s7", "--judge 2 --judge_target dissonance --judge_surprise 1 --gate_lo 0.15 --gate_hi 0.35 --seed 7"),
                                         ("j1b_bank", ""), ("j1b_bank_s7", "--seed 7"))},
+        # what the bank's gain is worth in data: plain needs how many more tokens to match the bank at 1B (0.929-0.932)?
+        # and wider sparsity: 128 routed modules, same compute per token
+        "worth": {"w_plain8_t2b": sweep.brain_group('ec32k')['b32k_plain8_t1b'] + " --tokens 2e9",
+                  "w_plain8_t3b": sweep.brain_group('ec32k')['b32k_plain8_t1b'] + " --tokens 3e9",
+                  "w_sparseB128c2_t1b": sweep.brain_group('ec32k')['b32k_sparseB32c2_t1b'] + " --n_modules 129"},
         "diag": {f"{k}_{tag}": f"{v} {extra}" for k, v in sweep.scale_group("ec32k").items() if k == "s_med_brain"
                  for tag, extra in (("nofp8", "--fp8 0"), ("sigmoid", "--sigmoid_router 1"))},
         "h200base": pick(["b32k_plain8_t100m", "b32k_plain8_t100m_s7"]),
