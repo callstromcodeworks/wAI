@@ -426,3 +426,22 @@ moved to 10 PM Central (03:00 UTC Oct 31), no new work after 9 PM Central.
   +0.144). Replaying a 110M model's reconstructions is not viable at this scale.
 - Running: worth (plain at 2B/3B tokens, 128-module bank), E (multi-depth growth at the most conflicted depths:
   prose-only and all 10 specialties; the big-pool sleep retest).
+
+### Results collected 2:50 PM Central Oct 30
+- E (multi-depth growth at the 3 most conflicted depths), 10 specialties: mean gain kept 0.0273 (best of all;
+  standard neurogenesis 0.0252, dissonance placement 0.0234), prose 0.0049 (vs 0.0017), kept 101%, English
+  -0.0003, code +0.0011. Caveat: 3x the modules per stage. Prose-only set: 0.0052 (fixed multi-depth 0.0058), so
+  the dissonance part matters when stages mix code and prose.
+- Dissonance-prioritised sleep, large pools (1024 new / 4096 old): 0.0251 total (= standard), prose -0.0010,
+  English +0.0018 / code +0.0016: no benefit; idea closed.
+- What the bank is worth (CORRECTION of my earlier ">2x data" estimate): plain small at 2B tokens 0.9010 vs plain
+  1B 0.9341 and bank 1B 0.9288-0.9318. Doubling data is worth ~0.033; the bank's ~0.004 is worth ~10% more data.
+  (Plain at 3B still running.)
+- 128-module bank at 1B: 0.9333, worse than 32 modules (0.929-0.932): wider sparsity doesn't help here.
+- RESUME BUG (fixed, wAI train.py): resume copied the run name from the checkpoint, so s_med_brain_fix (resumed
+  from a copy of d_fix's checkpoint) trained into sweep_d_fix; s_med_brain_fix's export was the stale step-2600
+  checkpoint (English 1.139). The real final medium brain is d_fix's export (English 1.0024 by the same eval; plain
+  1.0074), now also placed as s_med_brain_fix/model.safetensors (stale file kept as model.STALE_step2600). The
+  logged 0.8522 result stands (it came from the training process). Invalidated and redone: register probe on the
+  medium brain is +4.54 nats (94x odds; was +2.80 on the stale weights); D (medium neurogenesis) relaunched on the
+  correct weights.

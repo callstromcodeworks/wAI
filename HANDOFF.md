@@ -37,6 +37,14 @@ it. Budget is small: no large paid runs (the owner declined ~$1,500 scale-up for
   at depth 6 and lifts prose 2.6x. E runs combine the two.
 - Dissonance-prioritised sleep needs large pools (tiny pools memorised); cued recall still harmful.
 
+## Added Oct 30 afternoon (details in H200_PLAN.md)
+- Best neurogenesis setup: multi-depth growth at the most conflicted depths (0.0273 kept, prose 2.9x, no added
+  forgetting). Dissonance-prioritised sleep: no benefit (closed). Cued recall: harmful (closed).
+- The bank's gain is worth ~10% more data, not 2x (plain at 2B tokens 0.9010 vs bank at 1B ~0.930). 128 modules
+  are worse than 32. Treat the bank as a small, real improvement, not the big win.
+- Resume bug fixed in train.py: the real medium brain weights are d_fix's export (now also in s_med_brain_fix,
+  stale copy labelled). Anything evaluated on the old s_med_brain_fix export before 3 PM Oct 30 is invalid.
+
 ## In flight at handoff (on the vast.ai H200; results land in model/runs and D:\Claude\worksAI_runs\h200)
 - `abc` tmux: A (prose capacity; A_prose_long still running), B (dissonance-prioritised sleep; placement by
   dissonance), C (cued recall sleep: the model continues real 32-token fragments).
