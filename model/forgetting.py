@@ -302,26 +302,31 @@ def continual(a):
 
     @torch.no_grad()
     def recall(n_seq, batch=64):
-        """The model's own memories: n_seq sequences of T + 1 tokens sampled from it (temperature 1, starting
-        from a document boundary), before anything new is learned. Brains replay reconstructions, not records."""
+        """The model's own memories: n_seq sequences of T + 1 tokens sampled from it before anything new is learned.
+        Free recall starts from a document boundary; cued recall (--recall_prefix N) continues the first N tokens
+        of a real passage, the way a fragment triggers a memory. Brains replay reconstructions, not records."""
         eot = Tokenizer(VOCABS[vocab]).eot
         model.eval()
         gen = torch.Generator(device="cuda").manual_seed(a.seed)
         out = []
         for i in range(0, n_seq, batch):
-            ids = torch.full((min(batch, n_seq - i), 1), eot, dtype=torch.long, device="cuda")
-            for _ in range(T):
+            n = min(batch, n_seq - i)
+            if a.recall_prefix:  # cues: fragments of real old text
+                cues = [window(general[0] if len(general) == 1 or rng.random() < 0.6 else general[1])[:a.recall_prefix]
+                        for _ in range(n)]
+                ids = torch.from_numpy(np.stack(cues).astype(np.int64)).cuda()
+            else:
+                ids = torch.full((n, 1), eot, dtype=torch.long, device="cuda")
+            while ids.size(1) < T + 1:
                 with torch.autocast("cuda", torch.bfloat16), sdpa_kernel(SDPA_BACKENDS, set_priority=True):
                     h = model(ids)[:, -1]
-                nxt = torch.multinomial(torch.softmax(model.logits(h), -1), 1, generator=gen)
+                nxt = torch.multinomial(torch.softmax(model.logits(h) / a.recall_temp, -1), 1, generator=gen)
                 ids = torch.cat([ids, nxt], 1)
             out.append(ids.cpu().numpy())
             print(f"  recalled {i + len(ids)}/{n_seq} sequences", flush=True)
         model.train()
         return np.concatenate(out).astype(np.uint16).reshape(-1)  # one stream; windows may span sequences
 
-    if a.replay_source == "recall":  # old material comes only from the model's own memories, wake and sleep
-        general = [recall(a.recall_seqs)]
 
     def evaluate(tag):
         r = dict(tag=tag, **{k: score(model, v, token_bytes) for k, v in vals.items()},
@@ -334,13 +339,17 @@ def continual(a):
         st = rng.integers(0, len(src) - T - 1)
         return src[st:st + T + 1]
 
+    pools = {}  # sleep priority: replay drawn from tagged windows instead of at random
+
     def batch(new_sources, new_share):
         rows = []
         for _ in range(a.batch):
             if rng.random() < new_share:
-                rows.append(window(new_sources[rng.integers(len(new_sources))]))
+                rows.append(pools["new"][rng.integers(len(pools["new"]))] if "new" in pools else
+                            window(new_sources[rng.integers(len(new_sources))]))
             else:
-                rows.append(window(general[0] if len(general) == 1 or rng.random() < 0.6 else general[1]))
+                rows.append(pools["old"][rng.integers(len(pools["old"]))] if "old" in pools else
+                            window(general[0] if len(general) == 1 or rng.random() < 0.6 else general[1]))
         return torch.from_numpy(np.stack(rows).astype(np.int64)).cuda()
 
     def train(params, steps, new_sources, new_share, lr):
@@ -359,6 +368,46 @@ def continual(a):
                 (loss / a.accum).backward()
             opt.step()
             model.zero_grad(set_to_none=True)
+
+    @torch.no_grad()
+    def dissonance(rows, depths):
+        """Mean KL(final prediction || prediction read out after block d) per window, for each d: how far the model's
+        view at depth d is from its considered view (its internal conflict there). Returns [len(rows), len(depths)]."""
+        outs = {}
+        hooks = [model.blocks[d].register_forward_hook(lambda m, i, o, d=d: outs.__setitem__(d, o)) for d in depths]
+        model.eval()
+        res = torch.zeros(len(rows), len(depths))
+        for i in range(0, len(rows), 8):
+            r = torch.from_numpy(np.stack(rows[i:i + 8]).astype(np.int64)).cuda()
+            with torch.autocast("cuda", torch.bfloat16), sdpa_kernel(SDPA_BACKENDS, set_priority=True):
+                h = model(r[:, :-1])
+            for b in range(len(r)):
+                late = torch.log_softmax(model.logits(h[b].float()), -1)
+                for j, d in enumerate(depths):
+                    early = torch.log_softmax(model.logits(nn.functional.rms_norm(outs[d][b].float(), (h.size(-1),))), -1)
+                    res[i + b, j] = (late.exp() * (late - early)).nan_to_num(0.0).sum(-1).mean().item()
+        for hk in hooks:
+            hk.remove()
+        model.train()
+        return res
+
+    def tag_for_sleep(seen):
+        """Hippocampal tagging before sleep: of many candidate windows, keep the quarter where the model is most
+        conflicted (first impression at the routing depth vs final view), for new and for old material alike."""
+        d = [model.cfg.trunk_layers - 1]
+        for kind, n in (("new", 64), ("old", 256)):
+            cand = [window(seen[rng.integers(len(seen))]) if kind == "new" else
+                    window(general[0] if len(general) == 1 or rng.random() < 0.6 else general[1]) for _ in range(4 * n)]
+            score = dissonance(cand, d)[:, 0]
+            pools[kind] = [cand[j] for j in torch.argsort(score, descending=True)[:n].tolist()]
+        print(f"  tagged for sleep: {len(pools['new'])} new + {len(pools['old'])} old windows", flush=True)
+
+    def most_conflicted_depth(src, cands):
+        """Placement by dissonance: the depth where the new material is most conflicted relative to familiar text."""
+        new = dissonance([window(src) for _ in range(16)], cands).mean(0)
+        old = dissonance([window(general[0] if rng.random() < 0.6 else general[1]) for _ in range(16)], cands).mean(0)
+        gap = (new - old).tolist()
+        return cands[int(np.argmax(gap))], [round(g, 3) for g in gap]
 
     def neediest_depth(src):
         """Block whose output most needs to change for the new material: mean gradient norm on the stream."""
@@ -471,6 +520,8 @@ def continual(a):
         model.grown_at[key], model.grown_gates[key] = bank, gate
         return list(bank.parameters()) + list(gate.parameters()), key
 
+    if a.replay_source == "recall":  # old material comes only from the model's own memories, wake and sleep
+        general = [recall(a.recall_seqs)]
     curve = [evaluate("start")]
     fixed = [int(d) for d in a.depths.split(",")] if a.depths else list(range(1, len(model.blocks) - 1, 2))
     seen, layout, pruned = [], [], []
@@ -488,9 +539,22 @@ def continual(a):
                 params += p_
                 keys.append(k_)
         else:
-            depth = neediest_depth(new)[0] if a.placement in ("need", "need_spread") else fixed[st % len(fixed)]
-            params, key = add_modules(depth, st, a.per_stage * a.overgrow)
-            keys = [key]
+            if a.multi_depth:  # this stage grows per_stage modules at every listed depth at once
+                params, keys = [], []
+                for d in fixed:
+                    p_, k_ = add_modules(d, st, a.per_stage)
+                    params += p_
+                    keys.append(k_)
+            else:
+                if a.placement == "dissonance":
+                    depth, gap = most_conflicted_depth(new, list(range(1, len(model.blocks) - 1)))
+                    print(f"  placement by dissonance: depth {depth} (new - familiar KL by depth {gap})", flush=True)
+                elif a.placement in ("need", "need_spread"):
+                    depth = neediest_depth(new)[0]
+                else:
+                    depth = fixed[st % len(fixed)]
+                params, key = add_modules(depth, st, a.per_stage * a.overgrow)
+                keys = [key]
         for p in params:
             p.requires_grad_(True)
         if keys:
@@ -500,8 +564,11 @@ def continual(a):
         if a.overgrow > 1:  # most new neurons die; the ones that proved useful survive
             pruned.append(prune(keys[0], a.per_stage, new))
             print(f"  pruned {keys[0]}: harm {pruned[-1][0]} -> silenced {pruned[-1][1]}", flush=True)
+        if a.sleep_priority == "dissonance":
+            tag_for_sleep(seen)
         if a.consolidate_steps:  # sleep: replay only, the new material seen so far mixed with general text
             train(params, a.consolidate_steps, seen, a.sleep_new, lr / 3)
+        pools.clear()
         if a.grow:
             for p in params:
                 p.requires_grad_(False)  # matured: this stage's modules stop changing
@@ -516,7 +583,8 @@ def continual(a):
                 if (key, j) in saved:
                     silence(key, [j], on=False)
     res = dict(name=a.name, ckpt=a.ckpt, mode="continual", domains=a.domains, grow=a.grow, adapter=a.adapter,
-               replay_source=a.replay_source,
+               replay_source=a.replay_source, sleep_priority=a.sleep_priority, multi_depth=a.multi_depth,
+               recall_prefix=a.recall_prefix, recall_temp=a.recall_temp,
                stages=a.stages,
                per_stage=a.per_stage,
                placement=a.placement, init=a.init, consolidate_steps=a.consolidate_steps, overgrow=a.overgrow,
@@ -551,11 +619,16 @@ def main():
     ap.add_argument("--per_stage", type=int, default=2, help="continual: new modules grown per stage")
     ap.add_argument("--stage_steps", type=int, default=200, help="continual: training steps per stage")
     ap.add_argument("--consolidate_steps", type=int, default=50, help="continual: replay-only steps after each stage")
-    ap.add_argument("--placement", default="need", choices=["need", "need_spread", "fixed"],
+    ap.add_argument("--placement", default="need", choices=["need", "need_spread", "fixed", "dissonance"],
                     help="continual: where new modules go")
     ap.add_argument("--init", default="copy", choices=["copy", "copy_active", "fresh"],
                     help="continual: new module internals")
     ap.add_argument("--domains", default="", help="continual: comma list from data/<vocab>/domains, one stage each")
+    ap.add_argument("--multi_depth", type=int, default=0, help="continual: grow per_stage modules at every --depths each stage")
+    ap.add_argument("--sleep_priority", default="none", choices=["none", "dissonance"],
+                    help="continual: sleep replays the windows the model is most conflicted about")
+    ap.add_argument("--recall_prefix", type=int, default=0, help="continual, recall: cue length (real tokens) per memory")
+    ap.add_argument("--recall_temp", type=float, default=1.0, help="continual, recall: sampling temperature")
     ap.add_argument("--replay_source", default="data", choices=["data", "recall"],
                     help="continual: old material for replay: stored text, or the model's own samples")
     ap.add_argument("--recall_seqs", type=int, default=512, help="continual, recall: sequences sampled before learning")
