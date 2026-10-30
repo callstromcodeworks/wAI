@@ -445,3 +445,12 @@ moved to 10 PM Central (03:00 UTC Oct 31), no new work after 9 PM Central.
   logged 0.8522 result stands (it came from the training process). Invalidated and redone: register probe on the
   medium brain is +4.54 nats (94x odds; was +2.80 on the stale weights); D (medium neurogenesis) relaunched on the
   correct weights.
+
+### Results collected 5:21 PM Central Oct 30
+- D, neurogenesis at medium size (230M brain, correct weights), 10 specialties: neurogenesis 0.0116 kept (prose
+  0.0010, English +0.0000, code +0.0028); multi-depth at most-conflicted depths 0.0121 (prose 0.0023, English
+  -0.0002, code +0.0020); full fine-tuning 0.0389 at its stage -> 0.0157 kept (40%), English +0.0085, code +0.0329.
+  Still ~no forgetting, but half the small model's learning and now LESS kept than full fine-tuning. Likely cause:
+  added capacity didn't scale (same 256-wide modules in a 4x wider model: 2 modules ~1.7% of params vs 3.3% at
+  small). D2 (4 and 8 modules per depth per stage) running to test it.
+- Plain small at 3B tokens: 0.8865 (1B 0.9341, 2B 0.9010): the bank's ~0.930 at 1B equals ~1.1B tokens of plain.
