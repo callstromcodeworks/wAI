@@ -20,8 +20,16 @@ CODE = {"haskell": "Haskell", "lua": "Lua", "fortran": "FORTRAN", "rust": "Rust"
 WEB = {"medical": r"(nih\.gov|ncbi|mayoclinic|webmd|medlineplus|cdc\.gov|who\.int)",
        "law": r"(law\.|\.gov/.*(law|code|regulat)|uscode|justia|findlaw|legislation)",
        "music": r"(music|guitar|piano)",
-       "space": r"(nasa\.gov|space\.com|physics|astronomy)"}
-ORDER = ["haskell", "medical", "lua", "law", "fortran", "music", "rust", "space"]
+       "space": r"(nasa\.gov|space\.com|physics|astronomy)",
+       "philosophy": r"(plato\.stanford\.edu|iep\.utm\.edu|philosoph)"}
+# logic: chosen by text, not URL (URL matches are mostly "biological", "ecological", ...): a page must use at
+# least LOGIC_MIN different terms of formal logic and argument
+LOGIC = re.compile(r"\b(syllogisms?|modus ponens|modus tollens|propositional (?:logic|calculus)|predicate (?:logic|calculus)|"
+                   r"first-order logic|truth tables?|tautolog\w*|logical(?:ly)? (?:valid|equivalent|fallac\w*)|"
+                   r"deductive(?:ly)?|inductive reasoning|valid arguments?|sound arguments?|premises?|conclusion follows|"
+                   r"contrapositive|counterexample|necessary and sufficient|quantifiers?|inference rules?|proof by contradiction)\b", re.I)
+LOGIC_MIN = 4
+ORDER = ["haskell", "medical", "lua", "philosophy", "law", "fortran", "logic", "music", "rust", "space"]
 
 
 def docs_for(name):
@@ -31,6 +39,11 @@ def docs_for(name):
             for c, l in zip(t["code"].to_pylist(), t["language"].to_pylist()):
                 if l == CODE[name]:
                     yield c
+    elif name == "logic":
+        for f in sorted(glob.glob(os.path.join(RAW, "sample", "10BT", "*.parquet"))):
+            for x in pq.read_table(f, columns=["text"])["text"].to_pylist():
+                if len({m.lower() for m in LOGIC.findall(x)}) >= LOGIC_MIN:
+                    yield x
     else:
         rx = re.compile(WEB[name])
         for f in sorted(glob.glob(os.path.join(RAW, "sample", "10BT", "*.parquet"))):
@@ -45,10 +58,11 @@ def main():
     ap.add_argument("--vocab", default="ec32k")
     ap.add_argument("--train_tokens", type=int, default=3_000_000)
     ap.add_argument("--val_tokens", type=int, default=200_000)
+    ap.add_argument("--only", default="", help="build just these domains (comma list)")
     a = ap.parse_args()
     tok = Tokenizer(VOCABS[a.vocab])
     rng = np.random.default_rng(0)
-    for name in ORDER:
+    for name in (a.only.split(",") if a.only else ORDER):
         docs = list(docs_for(name))
         order = rng.permutation(len(docs))
         out = {"val": [], "train": []}
