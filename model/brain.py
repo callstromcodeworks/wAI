@@ -87,6 +87,7 @@ class BrainConfig(GPTConfig):
     # routed modules (top_k - 1 / top_k / top_k + 1 for the easiest / middle / hardest third, same average), once
     # its track record earns trust (as critic_gate); 3 = the same allocation by a random score (control)
     judge: int = 0
+    judge_surprise: bool = False  # the judge also sees how unexpected the arriving token was (layer trunk_layers' guess)
     gate_lo: float = 0.3         # trust is 0 while the critic's error correlation is below this...
     gate_hi: float = 0.6         # ...and 1 at or above this
     gate_observe_steps: int = 100  # optimizer steps of observing only, whatever the record
@@ -264,7 +265,8 @@ class BrainGPT(GPT):
             self.critic = None
         if cfg.judge:
             assert cfg.n_shared >= 1 and cfg.module_mode != "dense" and cfg.top_k >= 2 and not cfg.critic
-            self.judge_head = nn.Sequential(nn.Linear(cfg.module_dim, 64), nn.ReLU(), nn.Linear(64, 2))
+            self.judge_head = nn.Sequential(nn.Linear(cfg.module_dim + int(cfg.judge_surprise), 64), nn.ReLU(),
+                                            nn.Linear(64, 2))
             for name in ("trust", "corr_ema", "logvar_ref", "gate_steps"):
                 self.register_buffer(name, torch.zeros(()))
             self.register_buffer("judge_q", torch.zeros(2))  # running third / two-thirds cut-offs of its estimate
@@ -291,6 +293,14 @@ class BrainGPT(GPT):
             nn.init.zeros_(self.judge_head[2].weight)
             nn.init.constant_(self.judge_head[2].bias[0], 3.0)
             nn.init.constant_(self.judge_head[2].bias[1], 2.0)
+
+    @torch.no_grad()
+    def surprise(self, x, idx):
+        """How unexpected each arriving token was: cross-entropy of token t under the model's head applied to the
+        stream at position t-1 at this depth (a prediction error, known causally; 0 at the first position)."""
+        logits = self.logits(x[:, :-1].detach().float()).float()
+        s = torch.logsumexp(logits, -1) - logits.gather(-1, idx[:, 1:, None]).squeeze(-1)
+        return torch.cat([s.new_zeros(s.size(0), 1), s], 1) / 10.0
 
     def route(self, x, judged=None):
         """Per-token gates [B, T, E] (shared modules at 1, top-k routed renormalized), the
@@ -447,7 +457,10 @@ class BrainGPT(GPT):
                     judged = None
                     if c.judge:  # the judge sits in the shared module: run it first, its estimate steers routing
                         shared_out, hs = self.shared(x, cos_m, sin_m)
-                        head = self.judge_head(norm(hs[0].detach())).float().view(*x.shape[:2], 2)
+                        feats = norm(hs[0].detach())
+                        if c.judge_surprise:
+                            feats = torch.cat([feats, self.surprise(x, idx).reshape(-1, 1).to(feats.dtype)], -1)
+                        head = self.judge_head(feats.to(self.judge_head[0].weight.dtype)).float().view(*x.shape[:2], 2)
                         err, logvar = head[..., 0], head[..., 1].clamp(-6, 6)
                         judged = err.detach()
                     gates, balance, fired, (zloss, rlogit) = self.route(x, judged)

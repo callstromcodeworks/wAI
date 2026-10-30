@@ -83,6 +83,14 @@ def queues():
         "judge": {name: f"{sweep.brain_group('ec32k')['b32k_sparseB32c2_t100m']} {extra}"
                   for name, extra in (("j_alloc", "--judge 2"), ("j_alloc_s7", "--judge 2 --seed 7"),
                                       ("j_only", "--judge 1"), ("j_random", "--judge 3"))},
+        # judge round 2: round 1's judge reached corr ~0.37 at the routing depth, short of the trust bar (0.45 for
+        # half say), so it never allocated. Bar scaled to what's achievable this early (half say at 0.25, full at 0.35);
+        # j2_surprise also feeds it each token's surprise; c_bank_rerun measures run-to-run noise of the control
+        "judge2": {name: f"{sweep.brain_group('ec32k')['b32k_sparseB32c2_t100m']} {extra}"
+                   for name, extra in (("j2_alloc", "--judge 2 --gate_lo 0.15 --gate_hi 0.35"),
+                                       ("j2_random", "--judge 3 --gate_lo 0.15 --gate_hi 0.35"),
+                                       ("j2_surprise", "--judge 2 --judge_surprise 1 --gate_lo 0.15 --gate_hi 0.35"),
+                                       ("c_bank_rerun", ""))},
         "diag": {f"{k}_{tag}": f"{v} {extra}" for k, v in sweep.scale_group("ec32k").items() if k == "s_med_brain"
                  for tag, extra in (("nofp8", "--fp8 0"), ("sigmoid", "--sigmoid_router 1"))},
         "h200base": pick(["b32k_plain8_t100m", "b32k_plain8_t100m_s7"]),
