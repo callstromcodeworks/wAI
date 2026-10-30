@@ -62,6 +62,7 @@ def main():
     ap.add_argument("ckpt")
     ap.add_argument("--store_tokens", type=float, default=5e6, help="general text read into memory (60% English, 40% code)")
     ap.add_argument("--domain_tokens", type=float, default=1e6, help="training text per specialty read into memory")
+    ap.add_argument("--general_store", type=int, default=1, help="also test a memory of general text alone")
     ap.add_argument("--domains", type=int, default=1, help="also read each specialty's training text into memory")
     ap.add_argument("--eval_tokens", type=int, default=100_000, help="tokens scored per text type")
     ap.add_argument("--k", type=int, default=32)
@@ -87,11 +88,12 @@ def main():
             vals.append(y)
         keys, vals = torch.cat(keys), torch.cat(vals)
         print(f"memory '{label}': {len(keys):,} episodes ({keys.numel() * 2 / 2**30:.1f} GiB)", flush=True)
-        return keys, vals, keys.float().square().sum(-1)
+        key_sq = torch.cat([keys[c:c + (1 << 20)].float().square().sum(-1) for c in range(0, len(keys), 1 << 20)])
+        return keys, vals, key_sq
 
     general = [load_shard(os.path.join(HERE, "data", vocab, "fineweb-edu", "train_000000.bin"))[0][:int(a.store_tokens * 0.6)],
                load_shard(os.path.join(HERE, "data", vocab, "code", "train_000000.bin"))[0][:int(a.store_tokens * 0.4)]]
-    stores = {"general": general}
+    stores = {"general": general} if a.general_store else {}
     if a.domains:
         stores["general+specialties"] = general + [np.load(os.path.join(ddir, n, "train.npy"))[:int(a.domain_tokens)]
                                                    for n in names]
