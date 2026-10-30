@@ -50,7 +50,7 @@ for mode in ("routed_attn", "ffn"):
     m.eval()
     with torch.no_grad():
         h = torch.randn(3, 64, 384, device="cuda")
-        gates, _, fired = m.route(h)
+        gates, _, fired, _ = m.route(h)
         g, f = gates[..., 1:], fired[..., 1:]
         cos, sin = m.rope_cos_m[:64], m.rope_sin_m[:64]
         got, dropped = m.routed_bank(h, g, f, cos, sin)

@@ -23,7 +23,7 @@ with torch.autocast("cuda", torch.bfloat16):
 u = parts["usage"]
 ok(u[0].item() == 1.0 and abs(u.sum().item() - 3) < 1e-4, "shared module fires on every token, 2 routed per token",
    f"usage {[round(v, 3) for v in u.tolist()]}")
-gates, _, fired = m.route(torch.randn(2, 128, 384, device="cuda"))
+gates, _, fired, _ = m.route(torch.randn(2, 128, 384, device="cuda"))
 ok(torch.allclose(gates[..., 0], torch.ones_like(gates[..., 0])) and torch.allclose(gates[..., 1:].sum(-1),
    torch.ones_like(gates[..., 0])), "shared gate is 1, routed gates sum to 1")
 loss.backward()
@@ -39,7 +39,7 @@ old = BrainConfig(**{**cfg.__dict__, "n_shared": 0, "sigmoid_router": False, "n_
 with torch.device("cuda"):
     mo = BrainGPT(old)
 h = torch.randn(2, 16, 384, device="cuda")
-g, _, f = mo.route(h)
+g, _, f, _ = mo.route(h)
 logits = mo.router(__import__("gpt").norm(h)).float()
 top = logits.topk(2, -1).indices
 p = torch.softmax(logits, -1).gather(-1, top)
