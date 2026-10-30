@@ -393,11 +393,12 @@ def continual(a):
 
     def tag_for_sleep(seen):
         """Hippocampal tagging before sleep: of many candidate windows, keep the quarter where the model is most
-        conflicted (first impression at the routing depth vs final view), for new and for old material alike."""
+        conflicted (first impression at the routing depth vs final view), for new and for old material alike.
+        The pools must be large: tiny ones (64/256 windows) get replayed ~25 times each and memorised."""
         d = [model.cfg.trunk_layers - 1]
-        for kind, n in (("new", 64), ("old", 256)):
+        for kind, n in (("new", a.tag_new), ("old", a.tag_old)):
             cand = [window(seen[rng.integers(len(seen))]) if kind == "new" else
-                    window(general[0] if len(general) == 1 or rng.random() < 0.6 else general[1]) for _ in range(4 * n)]
+                    window(general[0] if len(general) == 1 or rng.random() < 0.6 else general[1]) for _ in range(2 * n)]
             score = dissonance(cand, d)[:, 0]
             pools[kind] = [cand[j] for j in torch.argsort(score, descending=True)[:n].tolist()]
         print(f"  tagged for sleep: {len(pools['new'])} new + {len(pools['old'])} old windows", flush=True)
@@ -541,7 +542,13 @@ def continual(a):
         else:
             if a.multi_depth:  # this stage grows per_stage modules at every listed depth at once
                 params, keys = [], []
-                for d in fixed:
+                depths = fixed
+                if a.placement == "dissonance":  # ... or at the most conflicted depths for this material
+                    cands = list(range(1, len(model.blocks) - 1))
+                    gap = most_conflicted_depth(new, cands)[1]
+                    depths = sorted(cands[j] for j in np.argsort(gap)[::-1][:len(fixed)])
+                    print(f"  multi-depth by dissonance: depths {depths} (gap {gap})", flush=True)
+                for d in depths:
                     p_, k_ = add_modules(d, st, a.per_stage)
                     params += p_
                     keys.append(k_)
@@ -627,6 +634,8 @@ def main():
     ap.add_argument("--multi_depth", type=int, default=0, help="continual: grow per_stage modules at every --depths each stage")
     ap.add_argument("--sleep_priority", default="none", choices=["none", "dissonance"],
                     help="continual: sleep replays the windows the model is most conflicted about")
+    ap.add_argument("--tag_new", type=int, default=1024, help="continual, sleep priority: new windows kept (of 2x)")
+    ap.add_argument("--tag_old", type=int, default=4096, help="continual, sleep priority: old windows kept (of 2x)")
     ap.add_argument("--recall_prefix", type=int, default=0, help="continual, recall: cue length (real tokens) per memory")
     ap.add_argument("--recall_temp", type=float, default=1.0, help="continual, recall: sampling temperature")
     ap.add_argument("--replay_source", default="data", choices=["data", "recall"],
