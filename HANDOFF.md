@@ -30,6 +30,13 @@ it. Budget is small: no large paid runs (the owner declined ~$1,500 scale-up for
   generative replay from the model's own free samples degrades everything; episodic kNN memory over general text
   hurts slightly (the memory repeats the model's own errors).
 
+## Added Oct 30 midday (details in H200_PLAN.md)
+- Episodic memory of NEW specialty text helps instantly, no training (Lua +8.3%, Rust +5.2%, Fortran +3.6%);
+  memory of general text does not. Prose barely benefits from memory either.
+- Prose: growing at 3 depths per stage = 3x longer training (0.0058 vs 0.0057); placement by dissonance puts prose
+  at depth 6 and lifts prose 2.6x. E runs combine the two.
+- Dissonance-prioritised sleep needs large pools (tiny pools memorised); cued recall still harmful.
+
 ## In flight at handoff (on the vast.ai H200; results land in model/runs and D:\Claude\worksAI_runs\h200)
 - `abc` tmux: A (prose capacity; A_prose_long still running), B (dissonance-prioritised sleep; placement by
   dissonance), C (cued recall sleep: the model continues real 32-token fragments).

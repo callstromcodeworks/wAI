@@ -408,3 +408,21 @@ explains a real but small part (~15% of philosophy's gap over general English); 
 results, most of the prose difficulty is understanding (meaning), not spelling or word choice.
 Credit: $70 left at 8:35 AM Central (13:35 UTC) Oct 30 at $4.028/h -> ~2 AM Central Oct 31; keeper final pull
 moved to 10 PM Central (03:00 UTC Oct 31), no new work after 9 PM Central.
+
+### Results collected 11:50 AM Central Oct 30 (times below in Central)
+- Episodic memory (memory_lm.py, 1B bank model, no training; settings chosen on one half, reported on the other):
+  a memory of general text (4M episodes) slightly HURTS at every setting (it repeats the model's own errors).
+  A memory that also read each specialty's training text (1M tokens each): Lua +8.3%, Rust +5.2%, Fortran +3.6%,
+  Haskell +2.5%, music +2.0%, prose 0.2-0.8%, general English +0.1%: instant learning of new code languages on a
+  par with neurogenesis's trained gains, from reading once; prose barely helps.
+- A prose capacity (mean prose gain kept): 2 modules 0.0028, 8 modules at one depth 0.0034, 2 at each of 3 depths
+  0.0058, 3x longer stages 0.0057. Depth spread equals tripling the time; no forgetting in any.
+- B placement by dissonance (10 specialties): prose modules went to depth 6, code to depths 1-2; prose gain 0.0045
+  vs 0.0017 with fixed spread (2.6x), total 0.0234 vs 0.0252, English -0.0004 / code +0.0009 (less forgetting).
+- B dissonance-prioritised sleep: catastrophic (English +0.144, code +0.148) because the tagged pools were tiny
+  (64 new / 256 old windows, each replayed ~25 times: memorised; the most conflicted windows are often odd text).
+  Retest with 1024 / 4096-window pools running (E_sleep_dissonance_bigpool).
+- C cued recall (32-token real cues, temperature 1.0 / 0.7): still harmful (English +0.033 / +0.015, code +0.096 /
+  +0.144). Replaying a 110M model's reconstructions is not viable at this scale.
+- Running: worth (plain at 2B/3B tokens, 128-module bank), E (multi-depth growth at the most conflicted depths:
+  prose-only and all 10 specialties; the big-pool sleep retest).
