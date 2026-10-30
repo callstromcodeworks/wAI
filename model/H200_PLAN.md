@@ -388,3 +388,12 @@ Neurogenesis keeps everything it learns across ten specialties, ends with more s
 fine-tuning, and learns ~2x more than adapters at the same parameter budget. Prose specialties gain only
 0.000-0.004 (code languages 0.03-0.10): the open problem. Generative replay (model's own samples) stopped at stage
 4 after degrading everything.
+
+### 13:00 UTC block (owner approved A-D)
+A prose capacity (medical, philosophy, law, logic): base 2 modules / 8 modules / 2 per depth at 1,3,5 together /
+3x longer stages. B (10 specialties): sleep replays the windows most conflicted between first impression and
+final view (tagged before each sleep: top quarter of 4x candidates, new and old); placement at the depth where
+new material is most conflicted relative to familiar text (smoke: Haskell -> depth 1, medical prose -> depth 6).
+C (10 specialties): cued recall, the model continues 32-token fragments of real old text (temperature 1.0 and
+0.7) instead of free sampling. D (starts when A ends): neurogenesis vs full fine-tuning on the fixed medium brain
+(230M, depths 2,6,10). Rental disk 83 -> 62% (17 verified checkpoints removed).
