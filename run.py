@@ -77,6 +77,12 @@ def queues():
         "diag3": {"d_fix": f"{sweep.scale_group('ec32k')['s_med_brain']} --stop_at 2600"},
         # s_med_brain with the gate fix, resumed from d_fix's step-2600 checkpoint (identical config and schedule)
         "scale2": {"s_med_brain_fix": sweep.scale_group("ec32k")["s_med_brain"]},
+        # one judging module beside the others: its per-token error estimate sets how many routed modules each token
+        # gets (same average). Controls: the same bank without a judge (b32k_sparseB32c2_t100m, 2 seeds), judge
+        # without allocation, and allocation by a random score
+        "judge": {name: f"{sweep.brain_group('ec32k')['b32k_sparseB32c2_t100m']} {extra}"
+                  for name, extra in (("j_alloc", "--judge 2"), ("j_alloc_s7", "--judge 2 --seed 7"),
+                                      ("j_only", "--judge 1"), ("j_random", "--judge 3"))},
         "diag": {f"{k}_{tag}": f"{v} {extra}" for k, v in sweep.scale_group("ec32k").items() if k == "s_med_brain"
                  for tag, extra in (("nofp8", "--fp8 0"), ("sigmoid", "--sigmoid_router 1"))},
         "h200base": pick(["b32k_plain8_t100m", "b32k_plain8_t100m_s7"]),
