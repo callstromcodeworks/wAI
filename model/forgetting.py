@@ -434,7 +434,8 @@ def continual(a):
             keys = [key]
         for p in params:
             p.requires_grad_(True)
-        layout.append(keys)
+        if keys:
+            layout.append(keys)
         lr = a.lr_adam if a.grow else a.lr_full
         train(params, a.stage_steps, [new], 1.0 - a.replay, lr)
         if a.overgrow > 1:  # most new neurons die; the ones that proved useful survive
