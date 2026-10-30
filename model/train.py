@@ -390,7 +390,9 @@ def main():
     if args.resume:
         ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
         saved = ckpt["args"]
-        for k in ("vocab", "preset", "run", "data", "mix", "seq_len", "micro_batch", "batch_tokens", "warmup_steps",
+        # the run name and data path stay as given: a checkpoint copied from another run (or machine) must not send
+        # this run's checkpoints and logs into the other run's folder (it did: s_med_brain_fix trained into sweep_d_fix)
+        for k in ("vocab", "preset", "mix", "seq_len", "micro_batch", "batch_tokens", "warmup_steps",
                   "cooldown_frac", "lr_muon", "lr_embed", "lr_scalar", "wd", "seed", "ce_chunk", "fp8", "arch",
                   "draft_weight", "critic_weight", "balance_weight", "aux_stride"):
             if k in saved:
