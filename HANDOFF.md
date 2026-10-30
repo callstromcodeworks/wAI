@@ -59,6 +59,22 @@ it. Budget is small: no large paid runs (the owner declined ~$1,500 scale-up for
   -o ForwardAgent=no -p 20275 root@ssh7.vast.ai`), code at /workspace/wAI. Never -A/-R/-X; never bring back or
   load a pickled ckpt.pt; only safetensors/json/text come home.
 
+## On the Linux machine: the Windows drives stay attached
+C: and D: remain readable from Ubuntu (NTFS, e.g. mounted at /mnt/c and /mnt/d; set them in /etc/fstab with the
+ntfs3 driver). Windows paths map over: `C:\Users\Ryan\Claude\...` -> `/mnt/c/Users/Ryan/Claude/...`,
+`D:\Claude\worksAI_runs\h200` -> `/mnt/d/Claude/worksAI_runs/h200`.
+- Turn off Windows Fast Startup (and don't hibernate) before booting Ubuntu, or the NTFS drives mount read-only.
+  If BitLocker is on, those drives need unlocking first.
+- NTFS ignores Linux permissions: copy `~/.ssh/vastai_ed25519` to the Linux `~/.ssh/` and `chmod 600` it there
+  (ssh refuses a key it sees as world-readable).
+- Results already pulled (safetensors/json) can be read in place. For training, copy the token shards
+  (model/data/ec32k, ec64k, ~8 GB each) to the Linux drive: ext4 on the NVMe is faster than NTFS for the data
+  loader, and keep new runs on Linux too.
+- Claude memory: copy `/mnt/c/Users/Ryan/.claude/projects/C--Users-Ryan-Claude/memory/` into the new project's
+  memory folder; its notes name Windows paths, which map as above.
+- Key files in worksAI (`ai.lan.key`, `ai.local.key`, `cluster/secrets/`) are visible through the mount too:
+  the rule not to read them still applies.
+
 ## Lessons to keep
 - Every training loop needs a non-finite guard, and status checks must read loss values, not just progress.
 - Test any new logging or option end to end (a short real run) before launching a queue.
