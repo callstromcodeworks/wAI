@@ -269,9 +269,16 @@ def continual(a):
     for p in model.parameters():
         p.requires_grad_(False)
     model.grown_at, model.grown_gates = nn.ModuleDict(), nn.ModuleDict()
-    ids_train = np.load(os.path.join(HERE, "data", vocab, "crawl", "train.npy"))
-    stages = np.array_split(ids_train, a.stages)
-    docs_val = rows_from(np.load(os.path.join(HERE, "data", vocab, "crawl", "val.npy")), 10 ** 9)
+    if a.domains:  # a sequence of specialties (build_domains.py): one stage per domain, every domain scored
+        names = a.domains.split(",")
+        ddir = os.path.join(HERE, "data", vocab, "domains")
+        stages = [np.load(os.path.join(ddir, n, "train.npy")) for n in names]
+        vals = {n: rows_from(np.load(os.path.join(ddir, n, "val.npy")), 10 ** 9) for n in names}
+        a.stages = len(names)
+    else:
+        ids_train = np.load(os.path.join(HERE, "data", vocab, "crawl", "train.npy"))
+        stages = np.array_split(ids_train, a.stages)
+        vals = {"docs": rows_from(np.load(os.path.join(HERE, "data", vocab, "crawl", "val.npy")), 10 ** 9)}
     keep = {src: rows_from(load_shard(os.path.join(HERE, "data", vocab, src, "val_000000.bin"))[0], a.keep_tokens // T)
             for src in ("fineweb-edu", "code")}
     general = [load_shard(os.path.join(HERE, "data", vocab, src, "train_000000.bin"))[0]
@@ -280,9 +287,10 @@ def continual(a):
     rng = np.random.default_rng(a.seed)
 
     def evaluate(tag):
-        r = dict(tag=tag, docs=score(model, docs_val, token_bytes),
+        r = dict(tag=tag, **{k: score(model, v, token_bytes) for k, v in vals.items()},
                  **{k: score(model, v, token_bytes) for k, v in keep.items()})
-        print(f"{tag:24s} | docs {r['docs']:.4f} | english {r['fineweb-edu']:.4f} | code {r['code']:.4f}", flush=True)
+        print(f"{tag:24s} | " + " | ".join(f"{k} {r[k]:.4f}" for k in vals) +
+              f" | english {r['fineweb-edu']:.4f} | code {r['code']:.4f}", flush=True)
         return r
 
     def window(src):
@@ -412,7 +420,9 @@ def continual(a):
     for st in range(a.stages):
         new = stages[st]
         seen.append(new)
-        if a.stages == 1 and a.placement == "fixed":  # one-shot: per_stage modules spread over 3 depths
+        if not a.grow:  # standard baseline: fine-tune the whole model, same schedule (learn, then sleep)
+            params, keys = [p for p in model.parameters()], []
+        elif a.stages == 1 and a.placement == "fixed":  # one-shot: per_stage modules spread over 3 depths
             params, keys = [], []
             for d in fixed[:3]:
                 p_, k_ = add_modules(d, 0, a.per_stage // 3)
@@ -425,14 +435,16 @@ def continual(a):
         for p in params:
             p.requires_grad_(True)
         layout.append(keys)
-        train(params, a.stage_steps, [new], 1.0 - a.replay, a.lr_adam)
+        lr = a.lr_adam if a.grow else a.lr_full
+        train(params, a.stage_steps, [new], 1.0 - a.replay, lr)
         if a.overgrow > 1:  # most new neurons die; the ones that proved useful survive
             pruned.append(prune(keys[0], a.per_stage, new))
             print(f"  pruned {keys[0]}: harm {pruned[-1][0]} -> silenced {pruned[-1][1]}", flush=True)
         if a.consolidate_steps:  # sleep: replay only, the new material seen so far mixed with general text
-            train(params, a.consolidate_steps, seen, a.sleep_new, a.lr_adam / 3)
-        for p in params:
-            p.requires_grad_(False)  # matured: this stage's modules stop changing
+            train(params, a.consolidate_steps, seen, a.sleep_new, lr / 3)
+        if a.grow:
+            for p in params:
+                p.requires_grad_(False)  # matured: this stage's modules stop changing
         curve.append(evaluate(f"stage {st + 1} ({','.join(keys)})"))
     audit = []  # each part is removable: silence it and see what it held
     for keys in layout:
@@ -443,7 +455,8 @@ def continual(a):
             for j in range(model.grown_gates[key].out_features):
                 if (key, j) in saved:
                     silence(key, [j], on=False)
-    res = dict(name=a.name, ckpt=a.ckpt, mode="continual", stages=a.stages, per_stage=a.per_stage,
+    res = dict(name=a.name, ckpt=a.ckpt, mode="continual", domains=a.domains, grow=a.grow, stages=a.stages,
+               per_stage=a.per_stage,
                placement=a.placement, init=a.init, consolidate_steps=a.consolidate_steps, overgrow=a.overgrow,
                stage_steps=a.stage_steps, layout=layout, curve=curve, pruned=pruned, audit=audit)
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -480,6 +493,9 @@ def main():
                     help="continual: where new modules go")
     ap.add_argument("--init", default="copy", choices=["copy", "copy_active", "fresh"],
                     help="continual: new module internals")
+    ap.add_argument("--domains", default="", help="continual: comma list from data/<vocab>/domains, one stage each")
+    ap.add_argument("--grow", type=int, default=1, help="continual: 0 = fine-tune the whole model instead (baseline)")
+    ap.add_argument("--lr_full", type=float, default=3e-4, help="continual --grow 0: AdamW LR for the whole model")
     ap.add_argument("--sleep_new", type=float, default=0.5, help="continual: share of new material in sleep replay")
     ap.add_argument("--depths", default="", help="continual, fixed placement: depths per stage (default 1,3,5,...)")
     ap.add_argument("--overgrow", type=int, default=1, help="continual: grow this many times per_stage, keep the most useful")
