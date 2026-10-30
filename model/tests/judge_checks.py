@@ -111,3 +111,22 @@ with torch.no_grad(), torch.autocast("cuda", torch.bfloat16):
         x2[:, t] = (x2[:, t] + 1) % 32763
         worst = max(worst, (a[:, :t] - ms(x2).float()[:, :t]).abs().max().item())
 ok(worst == 0.0, "surprise: causal with allocation (changing token t leaves earlier positions unchanged)", f"{worst:.2e}")
+
+# dissonance target: conflict between first impression and considered view, learned without the answer
+with torch.device("cuda"):
+    md = BrainGPT(BrainConfig(**{**base, "judge_target": "dissonance", "judge_surprise": True}))
+md.zero_grad()
+with torch.autocast("cuda", torch.bfloat16):
+    o = md(x)
+    loss, parts = md.train_loss(o, x, draft_weight=0, critic_weight=0.1, balance_weight=0.0)
+ok("dissonance" in parts and parts["dissonance"].item() >= 0, "dissonance: logged, never negative (a KL divergence)",
+   f"{parts.get('dissonance', torch.tensor(-1.0)).item():.3f} nats")
+md.zero_grad()
+with torch.autocast("cuda", torch.bfloat16):
+    o = md(x)
+    _, parts = md.train_loss(o, x, draft_weight=0, critic_weight=1.0, balance_weight=0.0)
+    (parts["critic_nll"].new_zeros(()) + md.train_loss(o, x, draft_weight=0, critic_weight=1.0, balance_weight=0.0)[0]
+     - md.train_loss(o, x, draft_weight=0, critic_weight=0.0, balance_weight=0.0)[0]).backward()
+g_rest = sum(p.grad.abs().sum().item() for n, p in md.named_parameters() if p.grad is not None and not n.startswith("judge_head"))
+g_head = sum(p.grad.abs().sum().item() for p in md.judge_head.parameters() if p.grad is not None)
+ok(g_rest == 0 and g_head > 0, "dissonance: the judge's loss trains only its head", f"rest {g_rest:.2e}, head {g_head:.2e}")

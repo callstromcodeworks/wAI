@@ -87,6 +87,11 @@ class BrainConfig(GPTConfig):
     # routed modules (top_k - 1 / top_k / top_k + 1 for the easiest / middle / hardest third, same average), once
     # its track record earns trust (as critic_gate); 3 = the same allocation by a random score (control)
     judge: int = 0
+    # what the judge learns to anticipate: "error" = the real per-token loss (needs the answer); "dissonance" = how far
+    # the model's first impression (its prediction at the routing depth) disagrees with its considered view (the
+    # final prediction): conflict between its own ideas, needing no answer (cognitive dissonance, with the surprise
+    # input as conflict between its idea and new evidence)
+    judge_target: str = "error"
     judge_surprise: bool = False  # the judge also sees how unexpected the arriving token was (layer trunk_layers' guess)
     gate_lo: float = 0.3         # trust is 0 while the critic's error correlation is below this...
     gate_hi: float = 0.6         # ...and 1 at or above this
@@ -447,7 +452,7 @@ class BrainGPT(GPT):
         x = norm(self.wte(idx)).bfloat16()
         L = len(self.blocks)
         skips, draft, err, logvar, balance = [], None, None, None, x.new_zeros((), dtype=torch.float32)
-        dropped = None
+        dropped = early = None
         zloss = rlogit = bank_rms = x.new_zeros((), dtype=torch.float32)
         usage = x.new_zeros(max(1, c.n_modules), dtype=torch.float32)
         for i, block in enumerate(self.blocks):
@@ -480,6 +485,7 @@ class BrainGPT(GPT):
                     add = add + self.grown(x, cos_m, sin_m, g.to(x.dtype))[0]
                 if torch.is_tensor(add):
                     bank_rms = add.detach().float().square().mean().sqrt()
+                early = x.detach() if c.judge and c.judge_target == "dissonance" else None  # its first impression
                 x = x + add
             if i == L - c.gate_layers:
                 draft = x
@@ -508,13 +514,13 @@ class BrainGPT(GPT):
         if not self.training:
             return out
         stats = (zloss, rlogit, bank_rms, x.detach().float().square().mean().sqrt())  # router/bank/stream health
-        return out, norm(draft).bfloat16(), err, balance, usage, logvar, dropped, stats
+        return out, norm(draft).bfloat16(), err, balance, usage, logvar, dropped, stats, early
 
     def train_loss(self, out, targets, chunk=2048, draft_weight=0.1, critic_weight=0.1, balance_weight=0.01,
                    stride=8, offset=0):
         """Main next-token loss plus the auxiliaries. The draft and critic losses use every
         stride-th position (from offset), which keeps their extra LM-head work to 1/stride."""
-        hidden, draft, err, balance, usage, logvar, dropped, (zloss, rlogit, bank_rms, resid_rms) = out
+        hidden, draft, err, balance, usage, logvar, dropped, (zloss, rlogit, bank_rms, resid_rms), early = out
         main = self.loss(hidden, targets, chunk)
         parts = {"main": main.detach()}
         total = main
@@ -527,7 +533,14 @@ class BrainGPT(GPT):
         if err is not None and critic_weight:
             if self.cfg.judge:  # the judge estimates the model's real (final) per-token loss
                 d_h = hidden[:, sel].flatten(0, 1)
-            target = per_token_loss(d_h, self.wte.weight, d_y, self.cfg.logit_softcap, chunk)
+            if early is not None:  # ... or its own internal conflict: KL(considered view || first impression)
+                with torch.no_grad():
+                    late = torch.log_softmax(self.logits(d_h.float()), -1)
+                    first = torch.log_softmax(self.logits(norm(early[:, sel].flatten(0, 1)).float()), -1)
+                    target = (late.exp() * (late - first)).nan_to_num(0.0).sum(-1)
+                parts["dissonance"] = target.mean()
+            else:
+                target = per_token_loss(d_h, self.wte.weight, d_y, self.cfg.logit_softcap, chunk)
             pred = err[:, sel].flatten()
             if logvar is not None:  # Gaussian NLL: it learns both the error and how sure it can be
                 lv = logvar[:, sel].flatten()
