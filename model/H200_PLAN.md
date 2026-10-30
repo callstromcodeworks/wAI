@@ -370,3 +370,21 @@ register at the formal end; consistent with the owner's point that even the form
 words). Register is represented even at 110M; with the loss split (word choice ~12% everywhere, prose difficulty
 mostly meaning), an explicit register gate is unlikely to fix the prose weakness at this scale; next for prose:
 content capacity per stage.
+
+### Judge at 1B tokens (judge1b): dissonance allocation gives no gain
+bank 0.9318 / 0.9288 (seeds 1337 / 7; original 0.9296) vs dissonance judge 0.9333 / 0.9295: paired +0.0015 /
++0.0007, within the 0.003 seed spread. The judge anticipates the model's own conflict at corr 0.61-0.67 with full
+trust throughout, but +/-1 routed module per token is not a useful response. Untested uses of the signal: sleep
+priority, neurogenesis placement, a stronger response (memory consult / weighting the alternative view).
+
+### 10-specialty benchmark, final (Haskell, medical, Lua, philosophy, law, Fortran, logic, music, Rust, space)
+mean bpb gain per specialty right after its stage / left at the end / kept / English lost / code lost:
+- neurogenesis, sleep 90% old: 0.0252 / 0.0252 / 100% / +0.0000 / +0.0014
+- neurogenesis, sleep 75% old: 0.0278 / 0.0280 / 101% / +0.0002 / +0.0023
+- adapters, same parameter budget: 0.0142 / 0.0130 / 92% / -0.0002 / +0.0010
+- full fine-tuning: 0.0568 / 0.0213 / 37% / +0.0121 / +0.0447 (Haskell 0.175 -> 0.063, Lua 0.120 -> 0.027,
+  law ends worse than it started)
+Neurogenesis keeps everything it learns across ten specialties, ends with more specialty knowledge than full
+fine-tuning, and learns ~2x more than adapters at the same parameter budget. Prose specialties gain only
+0.000-0.004 (code languages 0.03-0.10): the open problem. Generative replay (model's own samples) stopped at stage
+4 after degrading everything.
