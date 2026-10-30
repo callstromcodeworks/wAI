@@ -147,3 +147,118 @@ Next: E with twice the steps per stage.
 E2 (E with 400 + 100 steps per stage): learned 0.096 (vs 0.080), English +0.0013, code +0.0030: more training
 raises learning with forgetting flat, unlike full fine-tuning (which overfit and forgot 2x more at 900 steps).
 Safe to run long, as the owner proposed for continued training.
+
+### 19:55 UTC: medium brain runs diverged; guard added
+s_med_brain (230M, routed bank 1 shared + top-2 of 32, FP8) went NaN at step 1660 (0.22B of 1.5B tokens) and
+c_med_combo (same bank + concept memory + fast weights) at step 1940 (0.25B of 0.6B). Both at peak learning
+rate, both preceded by a jump in dropped tokens (0.09 -> 0.66-0.88) and balance NaN; a resume from step 1600
+diverged again at the same step, so it is deterministic instability, not a hardware fault. Last good evals:
+s_med_brain 1.0668 at step 1600 vs s_med_plain 1.0716 at the same step (the bank was ahead), c_med_combo 1.0164 at step 1900.
+No small brain run ever did this. train.py had no non-finite guard, so both kept stepping NaN weights and
+saving them (checkpoints unusable; ~13 GPU-hours lost). Fix (wAI f7f952c): a non-finite loss or gradient skips
+the step without touching weights; 20 in a row stops the run without saving. c_med_combo killed to free its
+slot. A rerun does not fit the rental; diagnose locally afterwards (router logit growth at medium width,
+FP8 in the bank, capacity drops).
+
+### Neurogenesis round 2 (local, 1B bank32 base; 3 stages x 2 modules, 400 + 100 steps, replay 0.25)
+learned / English lost / code lost; each run ends with a removal audit (silence one stage's part at a time):
+- E2b control (spread 1,3,5; random copy; sleep): 0.0973 / +0.0013 / +0.0034
+- H copy the modules the new material routes to: 0.0964 / +0.0013 / +0.0045 (no gain)
+- G need with crowding (chose 4, 4, 5) + copy-active: 0.0845 / +0.0014 / +0.0052 (worse: gradient size is a
+  poor measure of need; early blocks matter more)
+- I grow 4, keep the 2 whose removal hurts most: 0.0956 / +0.0014 / +0.0042 (no gain at the same final size;
+  usefulness varied 10x between modules, so selection works, but survivors lose partners they trained with)
+- J no sleep, same steps (500 + 0): 0.0753 / +0.0032 / +0.0101: sleep is the most important part: +29%
+  learning and a third of the forgetting. Without it stage 3 made the new material worse.
+Audit: each part removes cleanly (the old skill returns to within 0.0002-0.0013 of start). The block-1 part
+holds most of the new knowledge (removing it loses 0.05 of 0.097); later parts hold 0.006-0.017 each, and
+removing stage 2 costs less than expected because stage 3 compensated.
+Next (round 3): depth (all at block 1; 1,2,3; 0,1,2), more sleep (200), and a seed replicate for noise.
+
+### Neurogenesis round 3 (same setup; learned / English lost / code lost)
+- E2c (E2b, seed 1): 0.0953 / +0.0012 / +0.0043 -> seed noise ~0.002 learned, ~0.001 forgetting
+- L spread + sleep 200: 0.0996 / +0.0011 / +0.0033 (best: more sleep, more learning AND less forgetting)
+- K all at block 1: 0.0882 / +0.0010 / +0.0024 (least forgetting, less learning)
+- M blocks 1,2,3: 0.0831 / +0.0011 / +0.0025;  N blocks 0,1,2: 0.0835 / +0.0016 / +0.0036
+Spreading over depth learns most; the third stage at block 5 adds 0.017 where blocks 1-3 add ~0.006.
+Round 4: reversed order (5,3,1) to separate depth from stage order, sleep 400, all at block 5, and sleep
+replay with 75% old material.
+
+### 21:15 UTC: scale results
+s_med_plain_ec64k (64k vocabulary) 0.8489 mix bpb vs s_med_plain (32k) 0.8587: 1.1% better (English 0.9906 vs
+1.0023, code 0.6363 vs 0.6434) at equal tokens. Not equal data: a 64k token covers more bytes, so it saw more
+text, and has a larger embedding/head. Wall time 7.9 h vs 5.4 h, though runs shared the GPU so times are rough.
+memory2: m32k_concept_nopos_fast 0.983, m16_full 0.9545 (short-context eval; the long_context eval decides).
+
+### Neurogenesis round 4 (sleep 200 unless noted; learned / English lost / code lost)
+- R reversed order 5,3,1: 0.1017 / +0.0012 / +0.0033 (spread matters, order doesn't; the last stage always
+  holds a lot, since its sleep consolidates everything seen so far)
+- S sleep 400: 0.0974 / +0.0012 / +0.0032 (no better than 200: sleep saturates)
+- T all at block 5: 0.0892 / +0.0011 / +0.0042
+- U sleep replay 75% old (general) material: 0.0983 / +0.0004 / +0.0009: forgetting down 3-4x for ~1% less
+  learning. 0.0066 lost per unit learned vs 0.134 for full fine-tuning with replay (20x) and 0.055 for one-shot
+  growth with replay. Sleeping on old memories is what protects them.
+Round 5: replicate U (seed 1), 90% old in sleep, awake on new material only (all protection in sleep), U + 400.
+
+### 22:30 UTC: medium combo vs plain, 16k memory runs
+c_med_full4k (plain medium, full attention at 4k, 0.6B tokens): 0.8633 final; at step 1900 0.9847 vs
+c_med_combo 1.0164 at the same step (same schedule) before it diverged: at medium, the combo was 3% BEHIND,
+unlike small (1.1096 vs 1.1130 ahead). Likely the 512 window + 4 concept blocks costs more at 4k context than the
+bank gains; the bank alone at medium (s_med_brain) was 0.5% ahead at step 1600. Memory is the part that does not
+scale as is.
+16k context, 0.3B tokens, short eval: m16_full 0.9545, m16_concept_nopos 0.9798, m16_window 0.9870 (concepts
+recover ~23% of the window-to-full gap here; long_context eval pending).
+H200 queue: m16_concept_nopos_fast 52%, combo_small 17-39%; all expected done by ~00:30 UTC.
+
+### Neurogenesis round 5 (sleep 200; learned / English lost / code lost)
+- Y old-75% sleep, seed 1: 0.0976 / +0.0006 / +0.0022 (U's +0.0009 code was partly luck; still ~2x below 50/50)
+- V old-90% sleep: 0.0923 / +0.0002 / +0.0002: forgetting at noise level, 94% of the learning. A dial: the
+  share of old material in sleep trades a little learning for protection.
+- X awake on new material only (wake replay 0): 0.0975 / +0.0010 / +0.0032: replay while awake still matters.
+- W old-75% sleep 400: 0.0963 / +0.0005 / +0.0010 (no better than 200).
+Best recipe so far: staged growth (2 modules per stage) spread over depth, copied features, frozen base and
+earlier stages, 25% replay while learning, then a sleep of half the stage's length replaying 75-90% old material.
+
+### 23:41 UTC: divergence diagnostic (rental idle time, hard stop 01:15)
+s_med_brain reproduced its NaN at step 1660 from the same seed, so two variants with the identical seed, data
+order and VRAM cap (same micro-batching) test the cause: s_med_brain_nofp8 (--fp8 0) and s_med_brain_sigmoid
+(bounded router). Passing step 1660 cleanly points at the changed part; the trainer guard stops a diverged one.
+
+### 00:25 UTC: combo_small done; divergence diagnostic, first answer
+combo_small (8 x 512 small, 4k context, 0.6B tokens, mix bpb): c_full4k_t1b (plain, full attention) 0.9190,
+c_combo_full_t1b (bank + concept memory + fast weights) 0.9291, c_combo_mem_t1b (memory only) 0.9317. Full
+attention wins at 4k context by 1.1%; the bank adds 0.0026 on top of memory. Long-context eval pending.
+Diagnostic: s_med_brain_nofp8 diverged EARLIER (non-finite from step 1444, vs 1660 with FP8), with intermittent
+skips and then every step non-finite: an oversized but finite update makes activations overflow afterwards.
+FP8 is not the cause. s_med_brain_sigmoid (bounded router) at step 920, healthy so far.
+
+### 00:32 UTC: long-context eval (local, from pulled safetensors)
+4k-trained models at 8k (bpb by position; 40 docs per source):
+| run | keys/query | Eng 2-4k | Eng 4-8k | code 2-4k | code 4-8k |
+|---|---:|---:|---:|---:|---:|
+| c_full4k_t1b (full attention) | 8,192 | 1.1167 | 1.1526 | 0.5764 | 0.5901 |
+| c_combo_mem_t1b (concepts + fast) | 960 | 1.1422 | 1.1483 | 0.6281 | 0.6213 |
+| c_combo_full_t1b (+ bank) | 960 | 1.1410 | 1.1860 | 0.6273 | 0.6460 |
+Past its training length, full attention degrades on English (1.117 -> 1.153) and the memory model edges it
+(1.148); on code full attention still wins clearly. The bank version degrades past 4k (English 1.186, code
+0.646), likely because the routed modules use RoPE attention at positions they never saw (untested). Within 4k, full attention wins everywhere past 1k.
+16k-trained at 16k (fineweb has only 9 docs this long; code 40):
+| run | keys/query | Eng 4-16k | code 4-16k |
+|---|---:|---:|---:|
+| m16_full | 16,384 | 1.1611 | 0.5688 |
+| m16_window (512) | 576 | 1.2151 | 0.6748 |
+| m16_concept_nopos | 1,088 | 1.2010 | 0.6448 |
+| m16_concept_nopos_fast | 1,088 | 1.2110 | 0.6523 |
+Concepts recover 26% (English) / 28% (code) of the window-to-full gap with 7% of full attention's keys; less
+than the ~half recovered at 4k. Fast weights hurt at 16k (they helped with concepts at 4k). Conclusion: the
+concept memory as built (4 recalled blocks of 64) does not scale with context; recall needs to grow with
+context (more or adaptive blocks), or concepts need richer summaries than a pooled vector.
+
+### 00:40 UTC: diagnostic result; rental work finished
+s_med_brain_sigmoid (bounded router) never diverged, but only because its routed bank was effectively off:
+87.5% of routed tokens dropped from step 200 on (all modules over capacity), and at step 2000 it scored 1.0287 vs
+s_med_plain 1.0286. FP8-off diverged at 1444 (stopped by the guard at 20 skips, last checkpoint kept). So: not
+FP8; the only stable variant was the one without working routing, which points (weakly) at the routed bank's
+updates at medium width. Next, locally: log router logit and per-module output norms near the blow-up, and try
+router z-loss / lower bank learning rate / gradient clipping on the bank. Rental GPU idle from 00:40; no new
+work. Final export + pull at 02:00 UTC.
