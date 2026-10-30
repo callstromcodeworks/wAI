@@ -305,3 +305,16 @@ once its track record earns trust, the estimate sets each token's routed-module 
 hardest 3, same average; cut-offs are running averages, so causal). judge queue at 100M tokens vs the same bank
 without a judge (b32k_sparseB32c2_t100m, 2 seeds): j_alloc (2 seeds), j_only (no allocation), j_random (random
 allocation).
+Judge round 1 (100M tokens): the judge reached corr ~0.37 with the real loss at the routing depth, short of the
+trust bar (0.45 for half say), so it never allocated; j_alloc 1.1465/1.1438, j_only 1.1465, j_random 1.1471 vs
+control 1.1429/1.1405 (+0.003 to investigate; c_bank_rerun measures noise). Round 2 (judge2): bar scaled to the
+routing depth (half say at corr 0.25, full at 0.35), random-allocation control, and a surprise input (prediction
+error of the arriving token at the routing depth, causal).
+
+### Owner's aim for the judge: cognitive dissonance (own idea vs own idea, and own idea vs new evidence)
+The judge's target becomes the model's own internal conflict, KL(final prediction || first impression at the
+routing depth), needing no answer; surprise at the arriving token is its input (belief vs evidence); anticipated
+conflict brings in the router's next choice, an alternative view. Smoke run: dissonance grows to ~1.2 nats in 150
+steps and the judge anticipates it at corr 0.65 (vs 0.37 for the real error), earning trust 0.97. judge3 queue.
+Later uses of the same signal: dissonance-prioritised sleep replay, dissonance-placed neurogenesis, more memory
+recall when conflicted.
