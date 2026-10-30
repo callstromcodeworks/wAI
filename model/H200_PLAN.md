@@ -318,3 +318,8 @@ conflict brings in the router's next choice, an alternative view. Smoke run: dis
 steps and the judge anticipates it at corr 0.65 (vs 0.37 for the real error), earning trust 0.97. judge3 queue.
 Later uses of the same signal: dissonance-prioritised sleep replay, dissonance-placed neurogenesis, more memory
 recall when conflicted.
+Judge round 2 (100M): c_bank_rerun (identical config to the control's seed 1337) 1.1475 vs the original 1.1429:
+run-to-run noise ~0.005 at this size (today's code changes shift numerics; runs aren't bit-reproducible). So
+round 1's +0.003 was noise. j2_alloc (error judge, trust reached 0.97) 1.1488, j2_random 1.1471, j2_surprise
+1.1517: no difference from random allocation resolvable at 100M tokens. 100M is a screen only; anything promising
+goes to 1B tokens with 2-3 seeds.
