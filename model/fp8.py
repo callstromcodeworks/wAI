@@ -9,56 +9,45 @@ linear layer's three GEMMs run in FP8 with per-tensor dynamic scaling:
 
 The LM head (fused_ce.py), attention and normalization stay in bf16/fp32, and the master
 weights and optimizer state are unchanged. enable(model) switches the block Linears over.
+
+Layouts: _scaled_mm wants its first operand row-major and its second column-major, so the
+backward needs transposed copies of x, W and dy. Inductor miscompiles copies of fp8 data into a
+transposed layout (torch 2.15: NaN gradients; 2.14: at some shapes), so no fp8 tensor is ever
+transposed here: each transposed operand is cast from the bf16 transpose with the same scale,
+which Inductor fuses into one kernel. The GEMMs go through mm8, an op tagged needs_exact_strides
+so Inductor hands it exactly those row-major layouts.
 """
 import torch
 import torch.nn.functional as F
 
 E4M3, E5M2 = torch.float8_e4m3fn, torch.float8_e5m2
 E4M3_MAX, E5M2_MAX = 448.0, 57344.0
-# Some torch builds (2.15 on PyPI; possibly NVIDIA's pre-release NGC builds too) compile the weight-gradient
-# GEMM wrongly: Inductor drops the copies that lay out both operands and the gradient comes out NaN. Where
-# it compiles correctly the direct form is ~20% faster, so enable() tests this build once and picks.
-_SAFE_DW = None  # None: not checked yet; True: weight gradient through the opaque fp8_mm op
+_CHECKED = False
+
+
+def _cast(x, scale, dtype, maxval):
+    return (x.float() * scale).clamp(-maxval, maxval).to(dtype)
 
 
 def _quantize(x, dtype, maxval):
     """x -> (fp8 tensor, inverse scale) with the tensor's absmax mapped to the format's max."""
     amax = x.abs().amax().float().clamp(min=1e-12)
     scale = maxval / amax
-    return (x.float() * scale).clamp(-maxval, maxval).to(dtype), scale.reciprocal()
+    return _cast(x, scale, dtype, maxval), scale.reciprocal()
 
 
-@torch.library.custom_op("worksai::row_major", mutates_args=())
-def row_major(t: torch.Tensor) -> torch.Tensor:
-    """A row-major copy, made where torch.compile can't optimise it away. Inductor sometimes drops a plain
-    .contiguous() before _scaled_mm (torch 2.15 at every shape; 2.14 at some, e.g. 1024 x 6144), feeding it
-    a transposed layout: NaN gradients or a compile error. Its fake (shape) function declares the output
-    row-major, so the compiler knows the real layout and keeps _scaled_mm itself compiled."""
-    return t.contiguous().clone()
-
-
-@row_major.register_fake
-def _(t):
-    return torch.empty(t.shape, dtype=t.dtype, device=t.device)
-
-
-def _col_major(t):
-    """Same values, column-major layout (what _scaled_mm wants for its second operand)."""
-    return row_major(t.t()).t()
-
-
-@torch.library.custom_op("worksai::fp8_mm", mutates_args=())
-def fp8_mm(a: torch.Tensor, b: torch.Tensor, scale_a: torch.Tensor, scale_b: torch.Tensor, out_fp32: bool) -> torch.Tensor:
-    """a @ b.T for fp8 a [M, K] and b [N, K] (any layout), opaque to torch.compile so the layouts
-    _scaled_mm needs are always made here. Used for the weight gradient only, and only on builds where
-    the direct form miscompiles (see _SAFE_DW); the other two GEMMs stay visible to the compiler."""
-    return torch._scaled_mm(a.contiguous(), b.contiguous().t(), scale_a=scale_a, scale_b=scale_b,
+@torch.library.custom_op("worksai::mm8", mutates_args=(), tags=(torch.Tag.needs_exact_strides,))
+def mm8(a: torch.Tensor, bt: torch.Tensor, scale_a: torch.Tensor, scale_b: torch.Tensor, out_fp32: bool) -> torch.Tensor:
+    """a @ bt.T for fp8 a [M, K] and bt [N, K], both row-major."""
+    if not (a.is_contiguous() and bt.is_contiguous()):  # never seen; a copy here is slow but correct
+        a, bt = a.contiguous(), bt.contiguous()
+    return torch._scaled_mm(a, bt.t(), scale_a=scale_a, scale_b=scale_b,
                             out_dtype=torch.float32 if out_fp32 else torch.bfloat16)
 
 
-@fp8_mm.register_fake
-def _(a, b, scale_a, scale_b, out_fp32):
-    return a.new_empty((a.shape[0], b.shape[0]), dtype=torch.float32 if out_fp32 else torch.bfloat16)
+@mm8.register_fake
+def _(a, bt, scale_a, scale_b, out_fp32):
+    return a.new_empty((a.shape[0], bt.shape[0]), dtype=torch.float32 if out_fp32 else torch.bfloat16)
 
 
 class _FP8Linear(torch.autograd.Function):
@@ -66,20 +55,20 @@ class _FP8Linear(torch.autograd.Function):
     def forward(ctx, x, w):
         x8, sx = _quantize(x, E4M3, E4M3_MAX)
         w8, sw = _quantize(w, E4M3, E4M3_MAX)
-        y = torch._scaled_mm(x8, w8.t(), scale_a=sx, scale_b=sw, out_dtype=torch.bfloat16)  # x @ W^T
-        ctx.save_for_backward(x8, sx, w8, sw)
+        y = mm8(x8, w8, sx, sw, False)  # x @ W^T
+        # the backward's operands, transposed in bf16 and cast with the same scales
+        ctx.save_for_backward(_cast(x.t().contiguous(), sx.reciprocal(), E4M3, E4M3_MAX), sx,
+                              _cast(w.t().contiguous(), sw.reciprocal(), E4M3, E4M3_MAX), sw)
         ctx.w_dtype = w.dtype
         return y
 
     @staticmethod
     def backward(ctx, gy):
-        x8, sx, w8, sw = ctx.saved_tensors
+        xt8, sx, wt8, sw = ctx.saved_tensors
         g8, sg = _quantize(gy, E5M2, E5M2_MAX)
-        dx = torch._scaled_mm(g8, _col_major(w8), scale_a=sg, scale_b=sw, out_dtype=torch.bfloat16)  # dy @ W
-        if _SAFE_DW:  # dW = dy^T @ x through the opaque op (see fp8_mm)
-            dw = fp8_mm(g8.t(), x8.t(), sg, sx, True)
-        else:
-            dw = torch._scaled_mm(row_major(g8.t()), _col_major(x8), scale_a=sg, scale_b=sx, out_dtype=torch.float32)
+        gt8 = _cast(gy.t().contiguous(), sg.reciprocal(), E5M2, E5M2_MAX)
+        dx = mm8(g8, wt8, sg, sw, False)  # dy @ W
+        dw = mm8(gt8, xt8, sg, sx, True)  # dy^T @ x
         return dx, dw.to(ctx.w_dtype)
 
 
@@ -89,37 +78,36 @@ def fp8_linear(x, weight):
     return y.view(*shape[:-1], weight.shape[0])
 
 
-def _direct_dw_compiles_correctly():
-    """Compile a small FP8 linear with the direct weight-gradient form and compare its gradients
-    with the same layer run eagerly (which is always correct)."""
-    global _SAFE_DW
-    _SAFE_DW = False
+def check_compiled(tol=5e-2):
+    """Compile an FP8 linear and compare its gradients with the same layer run eagerly (always correct).
+    Different builds round the quantization differently (2.14: ~1-3% apart, 2.15: <0.1%); a miscompile
+    shows up as NaN or garbage. Returns the worst relative error, or raises on a bad build."""
     torch.manual_seed(0)
-    for n_in, n_out in ((128, 256), (1024, 6144)):  # a small shape and one that broke 2.14 before row_major
-        x = torch.randn(512, n_in, device="cuda", dtype=torch.bfloat16)
+    worst = 0.0
+    for m, n_in, n_out in ((512, 128, 256), (512, 1024, 6144), (4096, 768, 3072)):
+        x = torch.randn(m, n_in, device="cuda", dtype=torch.bfloat16)
         w = torch.randn(n_out, n_in, device="cuda") * 0.05
         grads = []
         for fn in (fp8_linear, torch.compile(fp8_linear, dynamic=False)):
             xr, wr = x.clone().requires_grad_(True), w.clone().requires_grad_(True)
-            try:
-                fn(xr, wr).float().pow(2).sum().backward()
-            except Exception:  # a compile-time layout error counts as miscompiling
-                return False
-            grads.append(wr.grad)
-        eager, compiled = grads
-        if not (bool(torch.isfinite(compiled).all()) and (compiled - eager).norm() <= 1e-2 * eager.norm()):
-            return False
-    return True
+            fn(xr, wr).float().pow(2).sum().backward()
+            grads.append((xr.grad.float(), wr.grad.float()))
+        for e, c in zip(*grads):
+            err = ((c - e).norm() / e.norm()).item()
+            if not (bool(torch.isfinite(c).all()) and err <= tol):
+                raise RuntimeError(f"fp8: this torch build miscompiles the FP8 linear ({m}x{n_in}->{n_out}: "
+                                   f"relative gradient error {err:.3g}); train with --fp8 0")
+            worst = max(worst, err)
+    return worst
 
 
 def enable(model):
     """Route the nn.Linear layers inside the transformer blocks through FP8 GEMMs. Small heads with a
     bias or a size FP8 can't tile (memory.py's per-head gates and write strengths) stay in bf16."""
-    global _SAFE_DW
-    if _SAFE_DW is None:
-        _SAFE_DW = not _direct_dw_compiles_correctly()
-        if _SAFE_DW:
-            print("fp8: this torch build miscompiles the direct weight-gradient GEMM; using the safe op")
+    global _CHECKED
+    if not _CHECKED:
+        check_compiled()
+        _CHECKED = True
     n = 0
     for mod in model.blocks.modules():
         if isinstance(mod, torch.nn.Linear):
