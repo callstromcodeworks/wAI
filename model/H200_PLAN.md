@@ -454,3 +454,10 @@ moved to 10 PM Central (03:00 UTC Oct 31), no new work after 9 PM Central.
   added capacity didn't scale (same 256-wide modules in a 4x wider model: 2 modules ~1.7% of params vs 3.3% at
   small). D2 (4 and 8 modules per depth per stage) running to test it.
 - Plain small at 3B tokens: 0.8865 (1B 0.9341, 2B 0.9010): the bank's ~0.930 at 1B equals ~1.1B tokens of plain.
+
+### Results collected 8:12 PM Central Oct 30 (last experiment of the rental)
+- D2, medium size, multi-depth at most-conflicted depths with more modules: 4 per depth 0.0136 kept (prose 0.0026,
+  English -0.0001, code +0.0020); 8 per depth 0.0150 (prose 0.0025, English -0.0001, code +0.0025) vs full
+  fine-tuning 0.0157 kept (English +0.0085, code +0.0329). Scaling the added capacity nearly closes the gap in
+  retained knowledge, beats full fine-tuning on prose and forgetting (13x less code forgetting); diminishing
+  returns (x4 -> x8 +0.0014). Design rule: added modules must scale with the model (count or width).
