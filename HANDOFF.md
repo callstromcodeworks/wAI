@@ -1,6 +1,7 @@
-# Handoff: brain-model research (state as of Oct 30, 2026, afternoon Central)
+# Handoff: brain-model research (state as of Oct 31, 2026, morning Central)
 
-Read this first, then `model/H200_PLAN.md` (the full results log, every run and decision in order). The owner's
+Read this first, then `model/H200_PLAN.md` (the full results log, every run and decision in order) and
+`model/LOCAL_PLAN.md` (the local RTX 4070 phase, from Oct 31). The owner's
 memory files (copied to the new machine's Claude memory folder) carry standing rules: security, time format
 (Central, 12-hour), divergence guards, rental details.
 
@@ -51,23 +52,36 @@ it. Budget is small: no large paid runs (the owner declined ~$1,500 scale-up for
   must scale with the model. Plain at 3B tokens 0.8865 (bank at 1B = ~1.1B tokens of plain).
 - Rental work ended 8:12 PM Central Oct 30; keeper final pull 10 PM Central. All results: H200_PLAN.md.
 
-## In flight at handoff (on the vast.ai H200; results land in model/runs and D:\Claude\worksAI_runs\h200)
-- `abc` tmux: A (prose capacity; A_prose_long still running), B (dissonance-prioritised sleep; placement by
-  dissonance), C (cued recall sleep: the model continues real 32-token fragments).
-- `worth` tmux: plain small at 2B and 3B tokens (what the bank's gain is worth in data), 128-module bank at 1B.
-- `mem` tmux: episodic memory of NEW specialty text (the real test of the hippocampus idea).
-- Keeper (local) final pull: 10 PM Central Oct 30. Credit runs out ~2 AM Central Oct 31.
-- Not started (deferred for budget): D (neurogenesis at medium size), #3 (sleep during pretraining).
+## Rental: finished
+All H200 work finished 8:12 PM Central Oct 30; the final pull (9:10 PM) brought everything home to
+D:\Claude\worksAI_runs\h200 (/mnt/d/Claude/worksAI_runs/h200 on Linux). Every result is in H200_PLAN.md, including
+A, B, C, D, D2, E, the data-worth runs and the specialty-memory test. #3 (sleep during pretraining) did not run.
+
+## Local phase (Ubuntu 26.04, RTX 4070 12 GB; details in model/LOCAL_PLAN.md)
+- Repo at ~/claude/wAI, .venv on Python 3.14 (torch 2.15.0+cu132); `run.py test` passes (11 suites).
+- FP8 fix (31cf051): the torch 2.15 workaround made eager fp8 transpose copies (~8% of step time); transposed
+  operands are now cast from the bf16 transpose. Plain small 71.3k -> 77.0k tok/s, 1 GiB less memory.
+- Card: persistence mode on (permanent); a 216 W power limit and the performance CPU governor gave no gain.
+- The owner runs an openbox desktop on the 4070: tell them before GPU-memory-heavy jobs so they can close it.
+- continual harness: training steps compiled (-33% wall time); episodic memory beside neurogenesis
+  (model/episodic.py, `--memory_tokens`); queue in model/cls_queue.sh (tmux `cls`).
 
 ## Next steps, in order
-1. Collect the in-flight results into H200_PLAN.md (summary scripts are in the scratch notes; each job writes
-   JSON: runs/forgetting/continual_*.json, runs/memory_lm.json, sweep_*/log.jsonl).
-2. If specialty memory helps: build the full complementary-learning loop (new text enters episodic memory
-   instantly; sleep consolidates it into neurogenesis modules; the judge's dissonance decides when to consult
-   memory).
-3. Prose: combine multi-depth growth with dissonance placement; longer stages if A_prose_long shows time matters.
-4. #3 sleep during pretraining (fixed data, several passes, dissonance-prioritised replay).
-5. Local Linux setup: Ubuntu 24.04, `python run.py setup`, then `python run.py test` before any training.
+1. Complementary-learning loop (step 2, running locally): each specialty enters episodic memory as it arrives;
+   after wake + sleep the memory is re-keyed and releases what the modules now predict (p >= 0.5). Questions: does
+   memory add on top of consolidated modules; does release keep the gain; which gate (fixed, entropy, dissonance)
+   decides best when to consult memory. Then: sleep that distils memory's predictions into the modules.
+   M1 (neurogenesis + memory) done Oct 31: memory adds 1.4-3.0% on top of the modules for code, ~0.2% for prose;
+   release at p >= 0.5 loses Lua's gain; a fixed blend beats the entropy and dissonance gates.
+   M2 (multi-depth at the most conflicted depths + memory) done Nov 1: better on every count (modules 0.0319 vs
+   0.0277 kept, prose 3x, memory on top 1.00% vs 0.87% and 0.82% vs 0.46% after release); still a fixed blend
+   best. Numbers in LOCAL_PLAN.md.
+   Topics overlap (philosophy's held-out text recurs in logic's training text, 18% of windows): expected and
+   harmless to the model, so no deduplication; only read memory's philosophy gain after logic arrives (15%) as
+   verbatim recall, not generalisation.
+2. Prose: answered on the H200 (multi-depth at the most conflicted depths, prose 2.9x; 3x longer stages = depth
+   spread). Revisit only if the memory loop changes the picture.
+3. #3 sleep during pretraining (fixed data, several passes, dissonance-prioritised replay).
 
 ## Where things are
 - Code: GitHub callstromcodeworks/wAI (this repo; the Linux version). Older Windows tree: worksAI (agent, phone
@@ -75,7 +89,13 @@ it. Budget is small: no large paid runs (the owner declined ~$1,500 scale-up for
 - Key tools: `run.py` (setup, data, test, train --queue, status, eval, export), `model/forgetting.py` (continual
   learning harness: `continual` with --domains, --multi_depth, --placement, --sleep_priority, --replay_source),
   `model/build_domains.py` (the 10-specialty benchmark), `model/memory_lm.py`, `model/register_diag.py`,
-  `model/register_probe.py`, `model/tokenization_diag.py`, `model/tests/*_checks.py`.
+  `model/register_probe.py`, `model/tokenization_diag.py`, `model/tests/*_checks.py`, `model/episodic.py`
+  (episodic memory for `continual --memory_tokens`), `model/cls_queue.sh` (the memory-loop runs).
+- Local data: token shards ec32k/ec64k and the raw parquet (copied from worksAI/model/data on C:); the 10-specialty
+  domains are rebuilt from the raw files by build_domains.py (offline, deterministic). Built in one pass they match
+  the H200's only for Haskell, medical and Lua (the H200 added philosophy and logic later with --only); see
+  LOCAL_PLAN.md for the H200-identical build.
+  The base model for the continual runs is the H200 export runs/sweep_b32k_sparseB32c2_t1b (safetensors).
 - Rental: vast.ai H200, SSH through the proxy only (`ssh -i ~/.ssh/vastai_ed25519 -o IdentitiesOnly=yes
   -o ForwardAgent=no -p 20275 root@ssh7.vast.ai`), code at /workspace/wAI. Never -A/-R/-X; never bring back or
   load a pickled ckpt.pt; only safetensors/json/text come home.
@@ -102,3 +122,6 @@ ntfs3 driver). Windows paths map over: `C:\Users\Ryan\Claude\...` -> `/mnt/c/Use
 - Small uncompiled jobs sharing the GPU with a compiled run slow it ~6x; run them separately or locally.
 - 100M-token runs have ~0.005 bpb run-to-run noise: use them as screens, confirm at 1B with 2+ seeds.
 - Ask before starting GPU runs outside an explicit autonomous mandate.
+- The H200 continual runs used `--lr_adam 0.006` (the default is 0.002): copy settings from cls_queue.sh or the
+  H200_PLAN commands, not from defaults.
+- Never kill a tmux queue's shell to "pause" it: the pane closes and SIGHUP kills the running job too.
