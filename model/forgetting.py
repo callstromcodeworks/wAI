@@ -308,7 +308,9 @@ def continual(a):
     The base and earlier stages stay frozen: only the current stage's modules (and their gates) learn.
     --stages 1 --placement fixed is the one-shot baseline (per_stage modules spread over blocks 1, 3, 5).
     With --memory_tokens each specialty also enters an episodic memory (episodic.py); --sleep_distill makes sleep
-    distil it: on replayed specialty text the target mixes the true next token with memory's prediction."""
+    distil it: on replayed specialty text the target mixes the true next token with memory's prediction.
+    With --stream (wai_struct) nothing is labeled: each day the model reads the specialty mixed into familiar text,
+    a hippocampal buffer keeps the windows that surprise it, and the night grows and learns from the buffer."""
     from brain import ModuleBank
     torch.manual_seed(a.seed)
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -452,9 +454,12 @@ def continual(a):
             pools[kind] = [cand[j] for j in torch.argsort(score, descending=True)[:n].tolist()]
         print(f"  tagged for sleep: {len(pools['new'])} new + {len(pools['old'])} old windows", flush=True)
 
-    def most_conflicted_depth(src, cands):
-        """Placement by dissonance: the depth where the new material is most conflicted relative to familiar text."""
-        new = dissonance([window(src) for _ in range(16)], cands).mean(0)
+    def most_conflicted_depth(src, cands, rows=None):
+        """Placement by dissonance: the depth where the new material is most conflicted relative to familiar text.
+        rows: draw the new material from these windows (label-free arrival: the hippocampal buffer) instead of src."""
+        pick = [rows[i] for i in rng.choice(len(rows), min(16, len(rows)), replace=False)] if rows is not None else \
+            [window(src) for _ in range(16)]
+        new = dissonance(pick, cands).mean(0)
         old = dissonance([window(general[0] if rng.random() < 0.6 else general[1]) for _ in range(16)], cands).mean(0)
         gap = (new - old).tolist()
         return cands[int(np.argmax(gap))], [round(g, 3) for g in gap]
@@ -570,6 +575,121 @@ def continual(a):
         model.grown_at[key], model.grown_gates[key] = bank, gate
         return list(bank.parameters()) + list(gate.parameters()), key
 
+    # label-free arrival (--stream): nobody says what is new. By day the model only reads an unlabeled stream and a
+    # hippocampal buffer keeps what surprises it; by night it grows, learns from the buffer, then sleeps.
+    familiar = {}  # the model's picture of familiar text, redrawn before each day (calibrate)
+
+    @torch.no_grad()
+    def read(rows, batch=8):
+        """What surprise needs from each window: its bits per byte (--surprise loss) or its mean state after block D,
+        normalised (today@D, maha@D, knn@D). Grown modules at D apply after the hook, as in placement's dissonance."""
+        kind, _, d = a.surprise.partition("@")
+        outs = {}
+        hk = model.blocks[int(d)].register_forward_hook(lambda m, i, o: outs.__setitem__("h", o)) if d else None
+        model.eval()
+        res = []
+        for i in range(0, len(rows), batch):
+            r = torch.from_numpy(np.stack(rows[i:i + batch]).astype(np.int64)).cuda()
+            x, y = r[:, :-1], r[:, 1:]
+            with torch.autocast("cuda", torch.bfloat16), sdpa_kernel(SDPA_BACKENDS, set_priority=True):
+                h = model(x)
+                if kind == "loss":
+                    res.append(model.token_losses(h, y).float().sum(1) / token_bytes[y].sum(1) / math.log(2))
+                else:
+                    res.append(nn.functional.rms_norm(outs["h"].float(), (h.size(-1),)).mean(1))
+        if hk is not None:
+            hk.remove()
+        model.train()
+        return torch.cat(res)
+
+    def surprise(f):
+        """Per window, how unlike familiar text it is: loss as is; maha = Mahalanobis distance of the state from
+        familiar text's (shrunk covariance); knn = cosine distance to the 10 nearest familiar windows."""
+        kind = a.surprise.partition("@")[0]
+        if kind == "loss":
+            return f.cpu().numpy()
+        if kind == "maha":
+            z = f - familiar["mu"]
+            return ((z @ familiar["prec"]) * z).sum(-1).sqrt().cpu().numpy()
+        sims = nn.functional.normalize(f, dim=-1) @ nn.functional.normalize(familiar["ref"], dim=-1).T
+        return (1 - sims.topk(10, dim=-1).values.mean(-1)).cpu().numpy()
+
+    def today(f, held):
+        """today@D: for each of the day's windows, the share of its --surprise_k nearest neighbours (cosine on the
+        state, itself excluded) among the day's windows plus familiar text that come from the day: "this keeps
+        coming up today, and I don't usually see it". The same share for familiar windows outside the day is the
+        null that sets the threshold. (A single window of a new topic is often no stranger than familiar text; what
+        sets the topic apart is that it recurs: surprise_probe.py.)"""
+        day_, ref, held = (nn.functional.normalize(v, dim=-1) for v in (f, familiar["ref"], held))
+        pool = torch.cat([day_, ref])
+        from_day = torch.cat([torch.ones(len(day_)), torch.zeros(len(ref))]).cuda()
+
+        def share(x, self_rows):
+            out = []
+            for i in range(0, len(x), 1024):
+                sims = x[i:i + 1024] @ pool.T
+                if self_rows:
+                    j = torch.arange(len(sims), device=sims.device)
+                    sims[j, i + j] = -2.0
+                out.append(from_day[sims.topk(a.surprise_k, dim=-1).indices].mean(-1))
+            return torch.cat(out).cpu().numpy()
+        return share(day_, True), share(held, False)
+
+    def calibrate():
+        """Before each day: read --surprise_ref windows of familiar text with the current model. Half fit the
+        picture of familiar text, the other half set the threshold: the --surprise_q quantile of their surprise
+        (so about 1 - q of familiar text gets kept by mistake)."""
+        ref = [window(general[0] if rng.random() < 0.6 else general[1]) for _ in range(a.surprise_ref)]
+        f = read(ref)
+        fit, held = f[:len(f) // 2], f[len(f) // 2:]
+        if a.surprise.startswith("maha"):
+            mu = fit.mean(0)
+            c = torch.cov((fit - mu).T)
+            c = 0.9 * c + 0.1 * c.diagonal().mean() * torch.eye(len(c), device=c.device)
+            familiar.update(mu=mu, prec=torch.linalg.inv(c))
+        elif a.surprise.startswith(("knn", "today")):
+            familiar["ref"] = fit
+        if a.surprise.startswith("today"):  # the threshold depends on the day itself: set in day()
+            familiar["held"] = held
+        else:
+            familiar["thr"] = float(np.quantile(surprise(held), a.surprise_q))
+
+    def day(st):
+        """One day's stream: all of the specialty's training text as consecutive windows (random start), mixed with
+        familiar text so the specialty is --stream_share of the stream, shuffled, unlabeled. The model only reads it;
+        windows above the threshold go to the buffer (at most --buffer_max, the most surprising). The labels are
+        used only to report how well the buffer caught the new material."""
+        ids = stages[st]
+        off = int(rng.integers(0, T))
+        n_new = (len(ids) - off - 1) // T
+        if a.day_windows:
+            n_new = min(n_new, int(a.day_windows * a.stream_share))
+        n_old = int(round(n_new * (1 - a.stream_share) / a.stream_share))
+        rows = [ids[off + i * T: off + i * T + T + 1] for i in range(n_new)] + \
+               [window(general[0] if rng.random() < 0.6 else general[1]) for _ in range(n_old)]
+        is_new = np.r_[np.ones(n_new, bool), np.zeros(n_old, bool)]
+        perm = rng.permutation(len(rows))
+        rows, is_new = [rows[i] for i in perm], is_new[perm]
+        if a.stream_oracle:  # control: a perfect detector
+            keep, thr = is_new.copy(), float("nan")
+        else:
+            calibrate()
+            if a.surprise.startswith("today"):
+                s, null = today(read(rows), familiar["held"])
+                thr = float(np.quantile(null, a.surprise_q))
+            else:
+                s, thr = surprise(read(rows)), familiar["thr"]
+            keep = s > thr
+            if a.buffer_max and keep.sum() > a.buffer_max:  # the hippocampus is small: the most surprising stay
+                keep &= s >= np.sort(s[keep])[-a.buffer_max]
+        tp = int((keep & is_new).sum())
+        stats = dict(read=len(rows), specialty=n_new, kept=int(keep.sum()), threshold=thr,
+                     precision=tp / max(1, int(keep.sum())), recall=tp / max(1, n_new),
+                     false_keep=int((keep & ~is_new).sum()) / max(1, n_old))
+        print(f"  day {st + 1}: read {len(rows)} windows ({n_new} new), kept {stats['kept']} | precision "
+              f"{stats['precision']:.3f} recall {stats['recall']:.3f} familiar kept {stats['false_keep']:.3f}", flush=True)
+        return [rows[i] for i in np.flatnonzero(keep)], stats
+
     if a.replay_source == "recall":  # old material comes only from the model's own memories, wake and sleep
         general = [recall(a.recall_seqs)]
     curve = [evaluate("start")]
@@ -637,9 +757,23 @@ def continual(a):
             return r
     fixed = [int(d) for d in a.depths.split(",")] if a.depths else list(range(1, len(model.blocks) - 1, 2))
     seen, layout, pruned = [], [], []
+    buffers, stream_stats = [], []  # label-free arrival: each night's buffer (kept for later sleeps), day reports
+    if a.stream and (not a.domains or not a.grow or a.adapter or mem is not None or a.sleep_priority != "none"
+                     or a.replay_source != "data" or a.overgrow > 1 or a.stages == 1):
+        raise SystemExit("--stream needs --domains with grown modules, more than one stage, and none of: adapters, "
+                         "memory, sleep priority, recall, overgrow")
     for st in range(a.stages):
         new = stages[st]
         seen.append(new)
+        buf = None
+        if a.stream:  # day: read the unlabeled stream, keep what surprises
+            buf, stats = day(st)
+            stream_stats.append(stats)
+            if len(buf) < a.buffer_min:  # nothing much surprised it: no growth, nothing to learn tonight
+                print(f"  night {st + 1}: buffer below {a.buffer_min} windows, no growth", flush=True)
+                curve.append(evaluate(f"day {st + 1} (quiet)"))
+                continue
+            buffers.append(buf)
         if mem is not None:  # instant: read the new text once, score everything before any training
             mem.arrive(names[st], new, a.memory_tokens)
             mem_curve.append(mem_evaluate(f"arrive {st + 1}"))
@@ -659,7 +793,7 @@ def continual(a):
                 depths = fixed
                 if a.placement == "dissonance":  # ... or at the most conflicted depths for this material
                     cands = list(range(1, len(model.blocks) - 1))
-                    gap = most_conflicted_depth(new, cands)[1]
+                    gap = most_conflicted_depth(new, cands, rows=buf)[1]
                     depths = sorted(cands[j] for j in np.argsort(gap)[::-1][:len(fixed)])
                     print(f"  multi-depth by dissonance: depths {depths} (gap {gap})", flush=True)
                 for d in depths:
@@ -668,7 +802,7 @@ def continual(a):
                     keys.append(k_)
             else:
                 if a.placement == "dissonance":
-                    depth, gap = most_conflicted_depth(new, list(range(1, len(model.blocks) - 1)))
+                    depth, gap = most_conflicted_depth(new, list(range(1, len(model.blocks) - 1)), rows=buf)
                     print(f"  placement by dissonance: depth {depth} (new - familiar KL by depth {gap})", flush=True)
                 elif a.placement in ("need", "need_spread"):
                     depth = neediest_depth(new)[0]
@@ -681,6 +815,8 @@ def continual(a):
         if keys:
             layout.append(keys)
         lr = a.lr_adam if a.grow else a.lr_full
+        if buf is not None:  # night, first part: learn from today's buffer (with the usual replay of general text)
+            pools["new"] = buf
         train(params, a.stage_steps, [new], 1.0 - a.replay, lr)
         if a.overgrow > 1:  # most new neurons die; the ones that proved useful survive
             pruned.append(prune(keys[0], a.per_stage, new))
@@ -690,6 +826,8 @@ def continual(a):
         if a.consolidate_steps:  # sleep: replay only, the new material seen so far mixed with general text
             if a.sleep_distill:  # ... carrying memory's predictions, to be distilled into this stage's modules
                 distilled.append(prepare_distill(st))
+            if buf is not None:  # sleep replays every night's buffer so far (as C2's sleep replays seen specialties)
+                pools["new"] = [r for b in buffers for r in b]
             train(params, a.consolidate_steps, seen, a.sleep_new, lr / 3)
         pools.clear()
         if a.grow:
@@ -717,7 +855,10 @@ def continual(a):
                stage_steps=a.stage_steps, layout=layout, curve=curve, pruned=pruned, audit=audit,
                replay=a.replay, sleep_new=a.sleep_new, memory_tokens=a.memory_tokens, memory_prune=a.memory_prune,
                memory_k=a.memory_k, memory_curve=mem_curve, sleep_distill=a.sleep_distill, distill_rows=a.distill_rows,
-               distilled=distilled)
+               distilled=distilled, stream=a.stream, surprise=a.surprise, surprise_q=a.surprise_q,
+               surprise_k=a.surprise_k,
+               stream_share=a.stream_share, buffer_max=a.buffer_max, stream_oracle=a.stream_oracle,
+               stream_stats=stream_stats)
     os.makedirs(OUT_DIR, exist_ok=True)
     json.dump(res, open(os.path.join(OUT_DIR, f"continual_{a.name}.json"), "w"), indent=1)
     if a.save:  # the grown parts (safetensors), to load on top of the base export with load_grown (samples.py)
@@ -779,6 +920,22 @@ def main():
     ap.add_argument("--sleep_new", type=float, default=0.5, help="continual: share of new material in sleep replay")
     ap.add_argument("--depths", default="", help="continual, fixed placement: depths per stage (default 1,3,5,...)")
     ap.add_argument("--overgrow", type=int, default=1, help="continual: grow this many times per_stage, keep the most useful")
+    ap.add_argument("--stream", type=int, default=0, help="continual --domains: label-free arrival (day: read an "
+                    "unlabeled stream, buffer the surprising windows; night: grow, learn from the buffer, sleep)")
+    ap.add_argument("--stream_share", type=float, default=0.5, help="stream: share of the day's windows that are new")
+    ap.add_argument("--day_windows", type=int, default=0, help="stream: windows per day (0 = the specialty's whole "
+                    "training text, plus familiar text to match --stream_share)")
+    ap.add_argument("--surprise", default="today@6", help="stream: today@D (over-represented today compared with "
+                    "familiar text, state after block D), or single-window loss, maha@D, knn@D (surprise_probe.py)")
+    ap.add_argument("--surprise_k", type=int, default=30, help="stream, today@D: neighbours compared")
+    ap.add_argument("--surprise_q", type=float, default=0.9, help="stream: keep windows above this quantile of "
+                    "familiar text's surprise")
+    ap.add_argument("--surprise_ref", type=int, default=4000, help="stream: familiar windows read before each day "
+                    "(half picture familiar text, half set the threshold)")
+    ap.add_argument("--buffer_max", type=int, default=0, help="stream: buffer capacity in windows (0 = unlimited)")
+    ap.add_argument("--buffer_min", type=int, default=64, help="stream: below this, no growth or learning that night")
+    ap.add_argument("--stream_oracle", type=int, default=0, help="stream control: the buffer keeps exactly the new "
+                    "windows (a perfect detector)")
     ap.add_argument("ckpt", nargs="?")
     ap.add_argument("--train", default="all")
     ap.add_argument("--docs", default=None, help="prepare: JSONL file of documents ({\"text\": ...} per line)")

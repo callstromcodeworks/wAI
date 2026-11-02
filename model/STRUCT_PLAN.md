@@ -34,6 +34,36 @@ The brain-like learning life cycle, built on the organization that already works
    context?
 Then the structural changes below, best value first.
 
+## Results log
+
+### 1. Label-free arrival (Nov 2)
+**Detector probe** (model/surprise_probe.py, base model, inference only):
+- **Single-window novelty fails.** Tried: loss, dissonance per depth, Mahalanobis distance of the state, distance to
+  the nearest familiar windows, unusual routing pattern.
+  - The code specialties stand out (Haskell, Fortran, Lua, Rust: AUC 0.75–0.89).
+  - The English ones (medical, law, philosophy, music, space) score *below* familiar text on every signal
+    (AUC 0.2–0.5). One window of them is no stranger to the model than familiar text.
+- **What sets a new topic apart is that it keeps coming up.** The signal is today@D: a window whose nearest
+  neighbours (state after block D) come mostly from today's stream rather than from familiar text.
+  - In a simulated 50/50 day at depth 6, k=30: AUC 0.958 (worst specialty, law, 0.880).
+  - At a threshold that keeps 10% of familiar text: precision 0.878, recall 0.933.
+  - Structurally, this is the hippocampus comparing the day's episodes with what the cortex knows. The day's states
+    are held until night, and the night selects what recurred.
+
+**Stream mode** (forgetting.py `--stream`):
+- **Day:** the specialty's whole training text as consecutive windows, mixed 50/50 into familiar text, shuffled,
+  unlabeled. The model only reads.
+- **Night:**
+  - The buffer keeps windows above the 0.9 quantile of familiar windows held outside the day.
+  - Grow 6 modules at the 3 depths most conflicted for the buffer (vs familiar text).
+  - 400 steps learning from the buffer with 25% general replay.
+  - 200 steps of sleep replaying every night's buffer so far, with the same shares as C2.
+- **Smoke test** (rust, space): precision 0.87 and 0.95, recall 0.96 and 0.92. The depths matched C2's labeled
+  choice (rust 1–3, space 4–6).
+- **Runs:** S1_stream, then its control S1o_stream_oracle with a perfect detector (struct_queue.sh, started
+  4:37 PM). Compare: `python model/stream_compare.py C2_spec_instruct_chat C2s_spec_instruct_chat S1_stream
+  S1o_stream_oracle`.
+
 ## Brain-like structure roadmap (moved from main's LOCAL_PLAN.md, Nov 2)
 The owner wants to "push the metaphor to the extreme". Clarified: brain-like in *structure*, not mimicking biology
 (neuron mechanics) and not about ability or sensation. The question is how closely the model's organization can
