@@ -79,6 +79,11 @@ A, B, C, D, D2, E, the data-worth runs and the specialty-memory test. #3 (sleep 
    M3 (M2 + sleep that distils memory's predictions into the modules, `--sleep_distill`) done Nov 2: no measurable
    effect (everything within ~0.005 bpb of M2; the dose was ~0.5% of the sleep loss and memory barely beats the
    model on the replay windows). Shelved; memory stays a separate component on top of the modules.
+   Instruction (Dolly-15k) and conversation (OpenAssistant oasst2) as modules, Nov 2: C1 on the base model,
+   instruct 1.125 -> 1.027, chat 0.925 -> 0.861; the instruct modules carry the shared answering skill (44% of
+   chat's gain), the chat modules only what's specific to conversation; both at depths 4-6, no forgetting. C2 after
+   the 10 specialties: the specialties lose nothing (max 0.0004), instruct/chat learn ~15% less than on the bare
+   base. C2 also reruns M2's modules: ~0.005 bpb run-to-run noise per specialty. Numbers in LOCAL_PLAN.md.
    Topics overlap (philosophy's held-out text recurs in logic's training text, 18% of windows): expected and
    harmless to the model, so no deduplication; only read memory's philosophy gain after logic arrives (15%) as
    verbatim recall, not generalisation.

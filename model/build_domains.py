@@ -30,10 +30,41 @@ LOGIC = re.compile(r"\b(syllogisms?|modus ponens|modus tollens|propositional (?:
                    r"contrapositive|counterexample|necessary and sufficient|quantifiers?|inference rules?|proof by contradiction)\b", re.I)
 LOGIC_MIN = 4
 ORDER = ["haskell", "medical", "lua", "philosophy", "law", "fortran", "logic", "music", "rust", "space"]
+# instruction and conversation data (not in ORDER: build with --only instruct,chat), written by people, in
+# data/raw_chat: instruct = Dolly-15k (databricks-dolly-15k.jsonl, CC BY-SA 3.0, sha256 2df90833...), single-turn;
+# chat = OpenAssistant oasst2 English (2023-11-05_oasst2_ready.trees.jsonl.gz, Apache-2.0, sha256 7a886a16...),
+# one conversation per tree along the best-ranked reply. Both as "User: ...\n\nAssistant: ..." turns.
+CHAT = {"instruct": ("dolly", "databricks-dolly-15k.jsonl"), "chat": ("oasst2", "2023-11-05_oasst2_ready.trees.jsonl.gz")}
+
+
+def chat_docs(name):
+    import gzip
+    import json
+    sub, f = CHAT[name]
+    path = os.path.join(HERE, "data", "raw_chat", sub, f)
+    if name == "instruct":
+        for line in open(path, encoding="utf-8"):
+            x = json.loads(line)
+            ask = x["instruction"].strip() + ("\n\n" + x["context"].strip() if x["context"].strip() else "")
+            yield f"User: {ask}\n\nAssistant: {x['response'].strip()}"
+        return
+    for line in gzip.open(path, "rt", encoding="utf-8"):
+        m = json.loads(line)["prompt"]
+        if m["lang"] != "en" or m.get("deleted"):
+            continue
+        turns = []
+        while m is not None:
+            turns.append(("User" if m["role"] == "prompter" else "Assistant") + ": " + m["text"].strip())
+            live = [r for r in m.get("replies") or [] if not r.get("deleted")]
+            m = min(live, key=lambda r: (r.get("rank") is None, r.get("rank") or 0)) if live else None
+        if len(turns) >= 2:
+            yield "\n\n".join(turns)
 
 
 def docs_for(name):
-    if name in CODE:
+    if name in CHAT:
+        yield from chat_docs(name)
+    elif name in CODE:
         for f in sorted(glob.glob(os.path.join(RAW, "data", "*.parquet"))):
             t = pq.read_table(f, columns=["code", "language"])
             for c, l in zip(t["code"].to_pylist(), t["language"].to_pylist()):
@@ -58,7 +89,7 @@ def main():
     ap.add_argument("--vocab", default="ec32k")
     ap.add_argument("--train_tokens", type=int, default=3_000_000)
     ap.add_argument("--val_tokens", type=int, default=200_000)
-    ap.add_argument("--only", default="", help="build just these domains (comma list)")
+    ap.add_argument("--only", default="", help="build just these domains (comma list; instruct and chat only so)")
     a = ap.parse_args()
     tok = Tokenizer(VOCABS[a.vocab])
     rng = np.random.default_rng(0)

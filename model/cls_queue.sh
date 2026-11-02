@@ -13,6 +13,10 @@ jobs=(
   "continual $B --domains $D $X --multi_depth 1 --placement dissonance $M --name M2_mddis_mem"
   # M2 + sleep that distils memory's predictions into the stage's modules (compare with M2)
   "continual $B --domains $D $X --multi_depth 1 --placement dissonance $M --sleep_distill 1 --name M3_mddis_distill"
+  # instruction (Dolly-15k) and conversation (oasst2) as modules (build_domains.py --only instruct,chat), no memory:
+  # C1 on the base model alone; C2 after the 10 specialties (does conversation training wear the specialties away?)
+  "continual $B --domains instruct,chat $X --multi_depth 1 --placement dissonance --name C1_instruct_chat"
+  "continual $B --domains $D,instruct,chat $X --multi_depth 1 --placement dissonance --name C2_spec_instruct_chat"
 )
 mkdir -p runs/forgetting
 for j in "${jobs[@]}"; do

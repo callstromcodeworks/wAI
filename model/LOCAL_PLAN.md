@@ -145,3 +145,55 @@ Test of success vs M2: modules alone better on the code specialties, memory on t
 - **Shelved (owner, Nov 1).** A real answer would need a much larger dose and 2+ seeds of both M2 and M3 (~6 h a
   run). Memory stays a separate component on top of the modules (as in M2). `--sleep_distill` stays in the code,
   off by default.
+
+### Instruction and conversation as modules (C1, C2; data and queue Nov 2)
+Data (build_domains.py --only instruct,chat; raw files in data/raw_chat): instruct = Dolly-15k (15,011
+single-turn instructions written by Databricks staff, CC BY-SA 3.0; 2.74M train tokens), chat = OpenAssistant
+oasst2 English (5,400 conversation trees written by volunteers, Apache-2.0, one conversation per tree along the
+best-ranked reply; 2.26M train tokens). Both as "User: ...\n\nAssistant: ..." turns, split by document.
+M2's settings (multi-depth at the most conflicted depths, sleep), no memory.
+
+**C1_instruct_chat (base model, instruct then chat; 2:24 - 2:34 AM Nov 2)**
+
+| | instruct | chat | English | code |
+|---|---|---|---|---|
+| start | 1.1254 | 0.9249 | 1.0777 | 0.7038 |
+| after instruct stage | 1.0272 | 0.8967 | 1.0779 | 0.7039 |
+| after chat stage | 1.0270 | 0.8606 | 1.0780 | 0.7039 |
+| without the instruct modules | 1.1148 | 0.8891 | | |
+| without the chat modules | 1.0272 | 0.8967 | | |
+
+- Both placed at depths 4-6 (where prose goes; the dissonance gap was strongly negative at depths 1-3).
+- Instruct learned 0.098 bpb (8.7%). Transfer one way: the instruct modules alone gave chat 0.028, 44% of
+  chat's total gain (0.064); the chat modules added nothing to instruct (0.0002).
+- The two module groups stack cleanly: switching off either removes just its own share (the instruct modules
+  still supply chat's 0.028 after the chat stage; the chat modules didn't relearn it). The shared part (answering
+  a request in the User/Assistant format) lives in the instruct modules; the chat modules hold what is specific to
+  multi-turn conversation.
+- No forgetting: English +0.0003, code +0.0001 (noise).
+
+**C2_spec_instruct_chat (the 10 specialties, then instruct, then chat; 2:34 - 4:36 AM Nov 2)**
+
+| | instruct | chat | specialties: mean kept | English / code drift |
+|---|---|---|---|---|
+| start | 1.1254 | 0.9249 | | |
+| after the 10 specialties (stage 10) | 1.1252 | 0.9255 | 0.0313 | -0.0003 / +0.0009 |
+| after instruct (stage 11) | 1.0473 | 0.8998 | 0.0313 | -0.0002 / +0.0009 |
+| after chat (stage 12) | 1.0419 | 0.8709 | 0.0314 | -0.0003 / +0.0009 |
+| C1 final (base model only) | 1.0270 | 0.8606 | | |
+
+- **Instruction and conversation training cost the specialties nothing:** from stage 10 to the end every
+  specialty moved by at most 0.0004 bpb (Haskell; mean 0.0001). The usual cost of instruction tuning (knowledge
+  worn away) doesn't appear when it goes into its own modules.
+- Separation stays clean: switching off the instruct modules removes instruct's gain (1.1138) and its share of
+  chat (0.8952); switching off the chat modules removes only chat's stage gain; the specialty modules don't touch
+  either (switching off space's modules leaves instruct and chat unchanged).
+- Placement: instruct at depths 4-6 as in C1; chat this time at depths 2-4 (C1: 4-6), and here it gave instruct a
+  little (0.0054; C1 0.0002).
+- Learned ~15% less than on the bare base model: instruct 0.084 (C1 0.098), chat 0.054 (C1 0.064). Single runs,
+  3x the noise level; possibly the router sharing depths 4-6 with the specialty modules already there (new modules
+  are copied from the base bank, not from the specialties, so not the init). Unchecked.
+- **Noise check:** C2's first 10 stages use M2's training settings (memory only reads and scores, it doesn't
+  train), so they are a rerun of M2's modules: Haskell 1.0350 vs 1.0299 (0.005), Rust 0.7187 vs 0.7209, Fortran
+  1.0012 vs 1.0002, mean kept 0.0314 vs 0.0319. Confirms ~0.005 bpb run-to-run noise per specialty, and that M3's
+  differences from M2 (Haskell 0.008, M3 vs C2 0.002) are noise.
