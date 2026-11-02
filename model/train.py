@@ -16,6 +16,15 @@ Throughput choices, each measured on an RTX 4070 (see bench.py and README.md):
 - The micro-batch is the largest that fits, checked with a real compiled step.
 - A VRAM cap: on Windows, CUDA silently spills to system RAM when VRAM runs out, which runs
   10x slower without an error. Capping the allocator turns that into a clean OOM instead.
+
+Memory switches, both off by default. Use them only for a model that doesn't fit otherwise (BEST.md, "Memory
+ceiling"): checkpointing first, bf16 state only as a last resort for the largest models.
+- --grad_ckpt 1: each block's activations are recomputed in the backward pass instead of kept. Same arithmetic,
+  about a third more compute per token (MFU as printed doesn't count the recompute).
+- --bf16_state 1: the hidden matrices' gradients (summed over micro-batches) and Muon's momentum are kept in bf16;
+  weights stay fp32. About 8 bytes per parameter instead of 12-16, but the numbers change slightly: a run with it
+  isn't comparable with fp32 runs at the noise level until a calibration pair (same run both ways) says so.
+Either one compiles block by block (GPT.compile_regions) instead of the whole model.
 """
 import argparse
 import base64
@@ -223,7 +232,7 @@ def build_optimizers(model, args):
     seen = [id(p) for g in groups_params for p in g]
     assert len(seen) == len(set(seen)) == len(list(model.parameters())), "every parameter in exactly one group"
     muon = Muon(model.matrix_params(), lr=args.lr_muon, momentum=0.95, weight_decay=args.wd,
-                splits=model.muon_splits())
+                splits=model.muon_splits(), state_dtype=torch.bfloat16 if getattr(args, "bf16_state", 0) else None)
     groups = [dict(params=embedding_like(model), lr=args.lr_embed, base_lr=args.lr_embed)]
     if model.scalar_params():
         groups.append(dict(params=model.scalar_params(), lr=args.lr_scalar, base_lr=args.lr_scalar))
@@ -231,9 +240,54 @@ def build_optimizers(model, args):
     return muon, adam
 
 
-def optimizer_state_bytes(model):
+class Bf16Grads:
+    """--bf16_state: the hidden matrices' gradients kept in bf16 across the micro-batches of a step.
+
+    A hook takes each matrix's fp32 gradient as soon as the backward pass has produced it, adds it into the matrix's
+    bf16 buffer (one rounding per micro-batch) and frees it, so with per-block compile only about one block's fp32
+    gradients exist at a time. Muon reads the buffers (Muon.grad_of). A matrix that got no gradient this step (a
+    module nothing was routed to) reads as None, as p.grad would."""
+
+    def __init__(self, params):
+        self.buf = {id(p): torch.zeros_like(p, dtype=torch.bfloat16) for p in params}
+        self.seen = set()
+        for p in params:
+            p.register_post_accumulate_grad_hook(self.take)
+
+    def take(self, p):
+        if id(p) in self.seen:
+            self.buf[id(p)].add_(p.grad)
+        else:
+            self.buf[id(p)].copy_(p.grad)
+            self.seen.add(id(p))
+        p.grad = None
+
+    def get(self, p):
+        return self.buf[id(p)] if id(p) in self.seen else None
+
+    def grads(self):
+        return [self.buf[i] for i in self.seen]
+
+    def clear(self):
+        self.seen.clear()
+
+
+def state_bytes(model, args):
+    """(optimizer state, gradients kept across micro-batches) in bytes, beyond what is already allocated."""
     adam = sum(p.numel() for p in embedding_like(model)) + sum(p.numel() for p in model.scalar_params())
-    return adam * 8 + (model.num_params() - adam) * 4  # AdamW m+v; Muon momentum on the matrices
+    mats, lowp = model.num_params() - adam, getattr(args, "bf16_state", 0)
+    optimizer = adam * 8 + mats * (2 if lowp else 4)  # AdamW m+v; Muon momentum on the matrices
+    return optimizer, (adam if lowp else model.num_params()) * 4  # bf16 buffers: allocated up front
+
+
+def backward(loss, args):
+    """loss.backward(). With --grad_ckpt the blocks are recomputed inside it, so it runs under the forward's choice of
+    attention kernels (a different kernel would save different tensors than the first pass did)."""
+    if getattr(args, "grad_ckpt", 0):
+        with sdpa_kernel(SDPA_BACKENDS, set_priority=True):
+            loss.backward()
+    else:
+        loss.backward()
 
 
 def step_loss(model, out, y, args, offset=0):
@@ -244,7 +298,7 @@ def step_loss(model, out, y, args, offset=0):
     return model.loss(out, y, args.ce_chunk), {}
 
 
-def pick_micro_batch(model, fwd, seq_len, ce_chunk, batch_seqs, args):
+def pick_micro_batch(model, fwd, seq_len, ce_chunk, batch_seqs, args, lowp=None):
     """Largest power-of-two micro-batch dividing batch_seqs that fits in memory for training.
 
     Starts from an estimate (activations measured at ~34 bytes per layer x d_model x token)
@@ -257,11 +311,15 @@ def pick_micro_batch(model, fwd, seq_len, ce_chunk, batch_seqs, args):
     if torch.cuda.get_per_process_memory_fraction() < 1.0:
         budget = min(budget, torch.cuda.get_per_process_memory_fraction() * torch.cuda.mem_get_info()[1]
                      - torch.cuda.memory_allocated())
-    reserve_bytes = optimizer_state_bytes(model) + model.num_params() * 4 + 384 * 2**20
-    fixed = model.num_params() * 4 + reserve_bytes + ce_chunk * c.vocab_size * 2 + c.vocab_size * c.d_model * 6
+    optimizer, kept_grads = state_bytes(model, args)
+    reserve_bytes = optimizer + kept_grads + 384 * 2**20
+    fixed = kept_grads + reserve_bytes + ce_chunk * c.vocab_size * 2 + c.vocab_size * c.d_model * 6
     per_seq = 36 * c.n_layer * c.d_model * seq_len
-    if hasattr(model, "activation_factor"):
-        per_seq = int(per_seq * model.activation_factor())
+    factor = model.activation_factor() if hasattr(model, "activation_factor") else 1.0
+    if getattr(args, "grad_ckpt", 0):  # kept: each block's input; recomputed: one block at a time (the brain's bank isn't checkpointed)
+        per_seq = int((2 * c.n_layer + 72) * c.d_model * seq_len + per_seq * (factor - 1))
+    else:
+        per_seq = int(per_seq * factor)
     estimate = max(1, int((budget - fixed) / per_seq))
     for b in (64, 32, 16, 8, 4, 2, 1):
         if b > estimate or batch_seqs % b:
@@ -272,7 +330,7 @@ def pick_micro_batch(model, fwd, seq_len, ce_chunk, batch_seqs, args):
             x = torch.randint(0, c.n_vocab, (b, seq_len), device="cuda", dtype=torch.int32)
             with torch.autocast("cuda", torch.bfloat16), sdpa_kernel(SDPA_BACKENDS, set_priority=True):
                 h = fwd(x)
-            step_loss(model, h, x, args)[0].backward()
+            backward(step_loss(model, h, x, args)[0], args)
             torch.cuda.synchronize()
             return b
         except torch.OutOfMemoryError:
@@ -280,6 +338,8 @@ def pick_micro_batch(model, fwd, seq_len, ce_chunk, batch_seqs, args):
         finally:
             del reserve
             model.zero_grad(set_to_none=True)
+            if lowp is not None:
+                lowp.clear()
             torch.cuda.empty_cache()
     raise SystemExit("model does not fit even at micro-batch 1")
 
@@ -371,6 +431,12 @@ def parse_args():
     ap.add_argument("--ce_chunk", type=int, default=2048, help="tokens per fused LM-head chunk")
     ap.add_argument("--compile", type=int, default=1)
     ap.add_argument("--fp8", type=int, default=0, help="FP8 GEMMs for the transformer's linear layers (fp8.py)")
+    ap.add_argument("--grad_ckpt", type=int, default=0,
+                    help="recompute block activations in the backward pass: same results, ~1/3 more compute. Only for "
+                         "models that don't fit otherwise (see the module docstring)")
+    ap.add_argument("--bf16_state", type=int, default=0,
+                    help="matrix gradients and Muon momentum in bf16 (weights stay fp32). Changes the numbers slightly: "
+                         "last resort for the largest models, after --grad_ckpt")
     ap.add_argument("--eval_every", type=int, default=250)
     ap.add_argument("--eval_bytes", type=int, default=4_000_000, help="validation text per source (bytes)")
     ap.add_argument("--save_every", type=int, default=500)
@@ -393,7 +459,7 @@ def main():
         # the run name and data path stay as given: a checkpoint copied from another run (or machine) must not send
         # this run's checkpoints and logs into the other run's folder (it did: s_med_brain_fix trained into sweep_d_fix)
         for k in ("vocab", "preset", "mix", "seq_len", "micro_batch", "batch_tokens", "warmup_steps",
-                  "cooldown_frac", "lr_muon", "lr_embed", "lr_scalar", "wd", "seed", "ce_chunk", "fp8", "arch",
+                  "cooldown_frac", "lr_muon", "lr_embed", "lr_scalar", "wd", "seed", "ce_chunk", "fp8", "bf16_state", "arch",
                   "draft_weight", "critic_weight", "balance_weight", "aux_stride"):
             if k in saved:
                 setattr(args, k, saved[k])
@@ -439,15 +505,27 @@ def main():
     with torch.device("cuda"):
         model = BrainGPT(cfg) if isinstance(cfg, BrainConfig) else GPT(cfg)
     muon, adam = build_optimizers(model, args)
+    lowp = None
+    if args.bf16_state:
+        lowp = Bf16Grads(model.matrix_params())
+        muon.grad_of = lowp.get
     if args.fp8:
         import fp8
         print(f"fp8: {fp8.enable(model)} linear layers")
-    fwd = torch.compile(model, dynamic=False) if args.compile else model
+    model.checkpoint_blocks = bool(args.grad_ckpt)
+    if args.compile and (args.grad_ckpt or args.bf16_state):
+        model.compile_regions()
+        fwd = model
+    else:
+        fwd = torch.compile(model, dynamic=False) if args.compile else model
+    if args.grad_ckpt or args.bf16_state:
+        print("memory switches:" + " grad_ckpt (block activations recomputed)" * bool(args.grad_ckpt)
+              + " bf16_state (matrix gradients + Muon momentum in bf16)" * bool(args.bf16_state), flush=True)
     data_dir = os.path.join(args.data, args.vocab)
 
     if not args.micro_batch:
         args.micro_batch = pick_micro_batch(model, fwd, args.seq_len, args.ce_chunk,
-                                            max(1, args.batch_tokens // args.seq_len), args)
+                                            max(1, args.batch_tokens // args.seq_len), args, lowp)
     accum = max(1, round(args.batch_tokens / (args.micro_batch * args.seq_len)))
     tokens_per_step = accum * args.micro_batch * args.seq_len
     mix = {k: float(v) for k, v in (kv.split("=") for kv in args.mix.split(","))}
@@ -531,15 +609,19 @@ def main():
                 h = fwd(x)
             loss, parts = step_loss(model, h, y, args, offset=(step * accum + micro) % args.aux_stride)
             loss = loss / accum
-            loss.backward()
+            backward(loss, args)
             step_main += parts.get("main", loss.detach() * accum) / accum
             for k, v in parts.items():
                 step_parts[k] = step_parts.get(k, 0) + v / accum
         # guard: a non-finite loss or gradient skips the step (weights untouched); a run that stays broken
         # stops without saving, so its last checkpoint is still good
         gnorm = torch.stack(torch._foreach_norm([p.grad for p in params if p.grad is not None])).float().sum()
+        if lowp is not None and lowp.seen:
+            gnorm = gnorm + torch.stack(torch._foreach_norm(lowp.grads())).float().sum()
         if not torch.isfinite(step_main + gnorm).item():
             model.zero_grad(set_to_none=True)
+            if lowp is not None:
+                lowp.clear()
             bad_steps += 1
             print(f"step {step}: non-finite loss or gradient, skipped ({bad_steps} in a row)", flush=True)
             if bad_steps >= 20:
@@ -554,6 +636,8 @@ def main():
         muon.step()
         adam.step()
         model.zero_grad(set_to_none=True)
+        if lowp is not None:
+            lowp.clear()
         if hasattr(model, "update_after_step"):
             model.update_after_step(step_parts)
         step += 1

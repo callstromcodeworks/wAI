@@ -33,6 +33,7 @@ from dataclasses import asdict, dataclass
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from fused_ce import linear_cross_entropy, per_token_loss
 from tokenizer import FULL_RANKS, SPECIAL_NAMES
@@ -344,6 +345,8 @@ class Block(nn.Module):
 
 
 class GPT(nn.Module):
+    checkpoint_blocks = False  # train.py --grad_ckpt: recompute each block's activations in the backward pass
+
     def __init__(self, cfg: GPTConfig):
         super().__init__()
         self.cfg = cfg
@@ -389,10 +392,35 @@ class GPT(nn.Module):
         for i, block in enumerate(self.blocks):
             if i >= L - self.n_skip:
                 x = x + self.skip_w[L - 1 - i] * skips.pop()
-            x = block(x, cos, sin, ctx)
+            x = self.run_block(block, x, cos, sin, ctx)
             if i < self.n_skip:
                 skips.append(x)
         return norm(x).bfloat16()
+
+    def run_block(self, block, x, cos, sin, ctx):
+        """One block. With checkpoint_blocks on, while training, its activations are freed after the forward pass and
+        recomputed in the backward pass: the same arithmetic in less memory, for about a third more compute. A block
+        reads and writes ctx (the first layer's values, K/V shared across layers), so the recompute gets a copy of ctx
+        as it was when the block first ran."""
+        if not (self.checkpoint_blocks and self.training and torch.is_grad_enabled()):
+            return block(x, cos, sin, ctx)
+        before = dict(ctx)
+
+        def body(x):
+            c = dict(before)
+            return block(x, cos, sin, c), c
+
+        x, after = checkpoint(body, x, use_reentrant=False)
+        ctx.update(after)
+        return x
+
+    def compile_regions(self):
+        """Compile each block on its own instead of the whole forward (train.py does this when --grad_ckpt or
+        --bf16_state is on). A whole-model graph hands over every weight's gradient together at the end of the
+        backward pass; per block, each block's gradients arrive as it finishes, which the bf16 gradient buffers rely
+        on, and checkpointing then wraps compiled code instead of being traced into the graph."""
+        for b in self.blocks:
+            b.compile(dynamic=False)
 
     def loss(self, hidden, targets, chunk=2048):
         return linear_cross_entropy(hidden.flatten(0, 1), self.wte.weight, targets.flatten(),

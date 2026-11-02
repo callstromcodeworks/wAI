@@ -304,3 +304,31 @@ Estimates (to be replaced by measurement):
 **Cheapest test when scheduled:** one continual run, Spanish (oasst2 `es`, needs a build_domains source like
 `chat` filtered by language) then TeX (github-code-clean `TeX`, add to CODE in build_domains.py), M2/C2 settings,
 no memory: ~25 min, no download.
+
+### Memory switches for bigger base models (Nov 2; not used by any run yet)
+The owner asked for both as switches, "with the plan not to use either unless we get close to hitting the
+ceiling": `train.py --grad_ckpt 1` (activation checkpointing) first, then `--bf16_state 1` (bf16 gradients and
+Muon momentum) only as a last resort for the largest models. Calibration pair on hold. Details and estimated
+ceilings are in BEST.md, "Memory ceiling".
+- Either switch compiles block by block instead of the whole model. With a whole-model graph, every weight's
+  gradient arrives together at the end of the backward pass. Per block they arrive as each block finishes, so the
+  bf16 buffers can take them one block at a time.
+  - Measured on a 4 x 1024 model: compiling per block alone lowered the peak during gradient accumulation by
+    87 MiB (449 -> 362 MiB above steady state).
+- Checkpointing gives the same results:
+  - The gradients are bit-identical to the normal path, eager and compiled. That covers K/V shared across layers,
+    value residual and U-net skips (state passed between blocks, so the recompute gets a copy of what each block
+    saw), and a brain model with a sparse bank.
+  - The backward pass runs under the forward's choice of attention kernels, so the recompute uses the same ones.
+  - Only the main blocks are checkpointed, not the brain's bank.
+- Smoke runs of 30 steps on tiny models (1.5 GB cap):
+
+  | model | switches | bpb | tokens/s | peak memory |
+  |---|---|---|---|---|
+  | plain | off | 2.8686 | 214k | 0.9 GiB |
+  | plain | `--grad_ckpt` | 2.8683 | 175k | 0.6 GiB |
+  | plain | both | 2.8679 | 176k | 0.6 GiB |
+  | brain, 9-module bank, FP8 | off | 2.8989 | 111k | 1.1 GiB |
+  | brain, 9-module bank, FP8 | both | 2.8980 | 65k | 0.9 GiB |
+
+  At full size the slowdown should be smaller (a tiny model is dominated by launch overhead); not measured yet.

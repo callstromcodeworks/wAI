@@ -501,7 +501,7 @@ class BrainGPT(GPT):
                     x = x + fix
             if i >= L - self.n_skip:
                 x = x + self.skip_w[L - 1 - i] * skips.pop()
-            x = block(x, cos, sin, ctx)
+            x = self.run_block(block, x, cos, sin, ctx)
             grown_at = getattr(self, "grown_at", None)  # modules added later (forgetting.py): key "depth" or
             if grown_at is not None:                    # "depth_stage", several per depth allowed
                 for key, bank_i in grown_at.items():
@@ -638,6 +638,16 @@ class BrainGPT(GPT):
         active = self.modules_per_token() if c.module_mode == "dense" else c.n_shared + c.top_k * c.capacity + c.critic
         extra = active * c.module_layers * c.module_dim * 1.6
         return 1 + extra / (c.n_layer * c.d_model)
+
+    def compile_regions(self):
+        """Per-block compile (GPT.compile_regions), plus the module bank, memory and critic, and the routing, each
+        on its own. The small heads and gates between them run uncompiled."""
+        super().compile_regions()
+        for name in ("bank", "shared", "critic", "memory"):
+            if getattr(self, name, None) is not None:
+                getattr(self, name).compile(dynamic=False)
+        self.route = torch.compile(self.route, dynamic=False)
+        self.routed_bank = torch.compile(self.routed_bank, dynamic=False)
 
     def describe(self):
         c = self.cfg

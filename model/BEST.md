@@ -229,3 +229,30 @@ D=haskell,medical,lua,philosophy,law,fortran,logic,music,rust,space
 ../.venv/bin/python viz/extract.py          # default --run is C2s -> runs/viz/data.json
 ../.venv/bin/python viz/build.py            # -> runs/viz/index.html
 ```
+
+## Memory ceiling (bigger base models)
+
+`train.py` has two memory switches, both off by default. **Plan: use neither unless a model is close to the card's
+ceiling. Use `--grad_ckpt` first. Use `--bf16_state` only as a last resort, to fit the largest models.**
+
+| switch | what it does | results | cost |
+|---|---|---|---|
+| `--grad_ckpt 1` | Each block's activations are recomputed in the backward pass instead of kept. | Same: the gradients are bit-identical in the checks. | Tiny-model test: plain model 18% slower, brain model 40% (its bank parts compile separately). Peak memory 0.9 -> 0.6 GiB. Not yet measured at full size. |
+| `--bf16_state 1` | Muon's momentum and the hidden matrices' gradients, summed over micro-batches, are kept in bf16. Weights stay fp32. | Slightly different. | About 8 bytes per parameter instead of 12-16. |
+
+- **Estimated largest model on the 12 GB card** (desktop closed; worked out from bytes per parameter, not measured at
+  full size):
+
+  | switches | largest model |
+  |---|---|
+  | none | ~500M |
+  | `--grad_ckpt` | ~800M |
+  | both | ~1.1-1.3B |
+
+  If a model doesn't fit, the automatic micro-batch picker stops with "does not fit even at micro-batch 1".
+- **Calibration pair, on hold.** Until it runs, a `--bf16_state` run can't be compared with fp32 runs at the noise
+  level. The pair: the intended configuration for ~100M tokens with `--grad_ckpt 1` alone and with both switches. A
+  gap within ~0.005 bpb means the bf16 state costs nothing measurable.
+- **To check whether a run used the switches:** `grad_ckpt` and `bf16_state` in its `config.json`, and a
+  "memory switches:" line in its output. `--bf16_state` is restored on `--resume`; `--grad_ckpt` can be changed there.
+- **Checks:** `tests/memory_switch_checks.py`, run by `run.py test`.

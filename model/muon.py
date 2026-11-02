@@ -37,11 +37,15 @@ def newton_schulz5(G, steps: int = 5):
 
 
 class Muon(torch.optim.Optimizer):
-    def __init__(self, params, lr=0.05, momentum=0.95, nesterov=True, ns_steps=5, weight_decay=0.0, splits=None):
-        """splits maps a parameter to its row-block sizes, e.g. [q_rows, k_rows, v_rows]."""
+    def __init__(self, params, lr=0.05, momentum=0.95, nesterov=True, ns_steps=5, weight_decay=0.0, splits=None,
+                 state_dtype=None):
+        """splits maps a parameter to its row-block sizes, e.g. [q_rows, k_rows, v_rows]. state_dtype: the momentum
+        buffers' dtype (None = the parameter's, fp32; torch.bfloat16 with train.py --bf16_state)."""
         super().__init__(params, dict(lr=lr, momentum=momentum, nesterov=nesterov, ns_steps=ns_steps,
                                       weight_decay=weight_decay))
         self.splits = {id(p): list(s) for p, s in (splits or {}).items()}
+        self.state_dtype = state_dtype
+        self.grad_of = None  # p -> its gradient or None; None reads p.grad (train.py --bf16_state: bf16 buffers)
 
     @torch.no_grad()
     def step(self):
@@ -49,14 +53,18 @@ class Muon(torch.optim.Optimizer):
             lr, mom, wd = group["lr"], group["momentum"], group["weight_decay"]
             buckets = defaultdict(list)  # matrix shape -> [(param, stack index, first row, matrix)]
             for p in group["params"]:
-                if p.grad is None:
+                grad = self.grad_of(p) if self.grad_of else p.grad
+                if grad is None:
                     continue
-                state = self.state[p]
-                if "momentum_buffer" not in state:
-                    state["momentum_buffer"] = torch.zeros_like(p)
-                buf = state["momentum_buffer"]
-                buf.lerp_(p.grad, 1 - mom)
-                g = p.grad.lerp(buf, mom) if group["nesterov"] else buf
+                state, want = self.state[p], self.state_dtype or p.dtype
+                buf = state.get("momentum_buffer")
+                if buf is None:
+                    buf = state["momentum_buffer"] = torch.zeros_like(p, dtype=want)
+                elif buf.dtype != want:  # load_state_dict casts state to the parameter's dtype
+                    buf = state["momentum_buffer"] = buf.to(want)
+                grad = grad.to(want)
+                buf.lerp_(grad, 1 - mom)
+                g = grad.lerp(buf, mom) if group["nesterov"] else buf
                 if wd:
                     p.mul_(1 - lr * wd)
                 for e, ge in enumerate(g.unbind(0) if g.dim() == 3 else (g,)):
