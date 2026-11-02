@@ -1,0 +1,14 @@
+# One prompt per line for samples.py --prompts (blank lines and lines starting with # are skipped).
+# One question per specialty of the 10-specialty benchmark, plus two general ones.
+Explain what a monad is in Haskell, in simple terms.
+Write a function in Rust that returns the largest number in a vector.
+How do I loop over a table in Lua and print each key and value?
+Write a Fortran subroutine that adds two arrays.
+What are the common symptoms of type 2 diabetes?
+What is the difference between a misdemeanor and a felony?
+What did Kant mean by the categorical imperative?
+What is modus ponens? Give an example.
+How do I play a C major chord on the guitar?
+Why does Mars look red?
+What causes the seasons on Earth?
+Give me three tips for sleeping better.

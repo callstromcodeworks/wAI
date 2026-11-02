@@ -4,6 +4,10 @@ A GPT language model trained on fasttok's ec200k vocabulary family, built to fin
 trade-off between **weight size** and **KV cache** for accuracy and speed on one consumer GPU
 (RTX 4070, 12 GB, Windows).
 
+> **Current best variant: see [BEST.md](BEST.md).** This README covers the Windows phase (Oct 2026: 20-minute
+> sweeps, then a 12-hour plain model). Its "Verdict" and "Recommended configuration" predate the 1B-token and
+> H200 results, where the module bank beats plain (BEST.md, H200_PLAN.md).
+
 Accuracy is always reported in **bits per byte** (bpb) of UTF-8 text, which doesn't depend on
 the tokenizer, so models with different vocabularies compare fairly. Every number below was
 measured on this machine.
@@ -283,7 +287,7 @@ Updating only the modules forgets about 40% more for the same learning, and lear
 Mixing 25% general text into the fine-tuning batches cut end-of-run forgetting 6x (1.8x at equal
 learning) while learning slightly more: that, not the architecture, is what protects old knowledge.
 
-**Verdict:** at this scale the modular pieces are neutral (bank, detached critic) or harmful
+**Verdict (Windows phase, 100M tokens; superseded at 1B, see BEST.md):** at this scale the modular pieces are neutral (bank, detached critic) or harmful
 (memory, joint critic, bank-only updates), and they cost 25-35% throughput. The one possible
 exception is the critic that earns its say with per-token confidence (-0.003 bpb vs no critic,
 within noise until replicated). The 12-block plain
@@ -295,6 +299,8 @@ a sustained 2 s GEMM at startup; the old 0.2 s burst could read before boost (28
 idle card for `b32k_ref`), so its "GPU shared" flag in the summary is a false positive.
 
 ## Recommended configuration
+
+(Windows phase, plain GPT. The best brain model and continual-learning setup are in [BEST.md](BEST.md).)
 
 ```powershell
 python train.py --vocab ec32k --preset small --n_kv_head 2 --value_residual 1 --unet 1 --fp8 1 --hours 8

@@ -217,7 +217,7 @@ The rerun matched C1 (instruct 1.0277 vs 1.0270, chat 0.8603 vs 0.8606).
   automobile; C1 has no specialty modules): a 136M model at 1B tokens learns the form, not the knowledge.
 
 ### 3D visualization (model/viz, Nov 2)
-`viz/extract.py` runs the base model plus a saved run's grown modules (default C1s) on three prompts (chat, Rust,
+`viz/extract.py` runs the base model plus a saved run's grown modules (default C2s since Nov 2, C1s before) on three prompts (chat, Rust,
 prose) and records the residual stream after every stage, attention per block and head, the router's picks with
 capacity drops, grown-module gates, the logit lens and module usage on 16k tokens of each of 14 datasets;
 `viz/build.py` inlines it into `viz/template.html` (three.js) -> runs/viz/index.html. Published as the private
@@ -229,44 +229,49 @@ artifact "BrainGPT, Inside". Found along the way:
   shrinks to 7% before block 4: blocks 4-7 write with ~14x more relative weight.
 - Short prompts squeeze the bank: capacity is 2 x T x 2 / 32 slots per module, 3 on a 19-token prompt (128 in
   training), so some routes are dropped at inference on short inputs.
+- Nov 2, after C2s: the page reads the grown modules from the run (one centred row per depth, a shade per stage, the
+  run's own scores in the chapter), so any saved run works; republished with C2s's 72 modules (C1s's data kept as
+  runs/viz/data_C1s.json). The camera animation now clamps its progress at 0 (a frame time earlier than the click
+  sent it backwards). Headless screenshots of the page can come out black (an idle canvas, not a render failure):
+  copy the canvas into an <img> after a render to check it.
 
-### Next run: C2s_spec_instruct_chat (planned Nov 2, NOT started: the owner starts it)
-**Question:** does the specialty knowledge come through when the model answers in chat form? C1s's replies had
-the assistant form but wrong content, and it has no specialty modules (a Haskell monad came out as an automobile).
-C2's model has the 10 specialty modules plus instruct and chat, but C2 didn't save its modules, so: C2 again with
-`--save`. Same settings as C2, so its scores should match C2 within ~0.005 bpb (a second noise check).
+### C2s_spec_instruct_chat: do the specialties come through in chat? (10:01 AM - 12:02 PM Nov 2)
+**Question:** does specialty knowledge show when the model answers in chat form? C1s's replies had the assistant
+form but wrong content, and C1s has no specialty modules. C2s is C2 again with `--save` (queue line in
+cls_queue.sh), so its modules can be loaded and sampled. Prompts: model/prompts/specialties.txt (one question per
+specialty, plus two general ones); samples in runs/forgetting/C2s_spec_instruct_chat/samples_specialties.md and,
+for chat without specialties, runs/forgetting/C1s_instruct_chat/samples_specialties.md (not in git).
 
-**To resume (all code and data are in place; nothing to build):**
-1. Tell the owner first (GPU-memory notice: they may need to close the openbox desktop). ~2 h on the 4070 (C2:
-   2:34 - 4:36 AM), ~3-4 GB (C1 used 2.8 GB).
-2. In model/cls_queue.sh uncomment the C2s line (the last job). Launch from model/:
-   `tmux new-session -d -s cls bash -c './cls_queue.sh 2>&1 | tee -a runs/forgetting/cls_queue.log'`
-   The queue skips every job whose runs/forgetting/continual_<name>.json exists, so only C2s runs.
-   Progress: runs/forgetting/C2s_spec_instruct_chat.log (one "stage N" line per specialty, then "without ..."
-   audit lines, then "saved the grown parts to runs/forgetting/C2s_spec_instruct_chat"); start/done/FAILED lines
-   in runs/forgetting/cls_queue.log. Check the log for NaN / Traceback.
-3. Compare its final scores with C2 (continual_C2_spec_instruct_chat.json): specialties, instruct 1.0419, chat
-   0.8709, English/code drift.
-4. Sample replies. samples.py needs a small addition first: a `--prompts FILE` option (one prompt per line) to
-   replace its 4 fixed prompts. Planned prompts, one per specialty plus two general:
-   - Haskell: Explain what a monad is in Haskell, in simple terms.
-   - Rust: Write a function in Rust that returns the largest number in a vector.
-   - Lua: How do I loop over a table in Lua and print each key and value?
-   - Fortran: Write a Fortran subroutine that adds two arrays.
-   - medical: What are the common symptoms of type 2 diabetes?
-   - law: What is the difference between a misdemeanor and a felony?
-   - philosophy: What did Kant mean by the categorical imperative?
-   - logic: What is modus ponens? Give an example.
-   - music: How do I play a C major chord on the guitar?
-   - space: Why does Mars look red?
-   - general: What causes the seasons on Earth? / Give me three tips for sleeping better.
-   Run: `../.venv/bin/python samples.py runs/forgetting/C2s_spec_instruct_chat --prompts <file>
-   --variants base,-instruct+chat,-chat,all --n 2` (base = no grown modules; -instruct+chat = the specialty
-   modules only; -chat = specialties + instruct; all = everything). Also run C1s on the same prompt file for
-   chat-without-specialties. -> runs/forgetting/<run>/samples.md (not in git).
-5. Read: on specialty questions, does "all" in C2s get more right than "all" in C1s (same chat skill, no
-   specialty modules) and than "-instruct+chat" (specialty knowledge, no chat form)? Write up here and in
-   HANDOFF.md; commit and push only when the owner asks.
+**Scores: a second noise check, passed.** The same settings as C2 put every stage at the same depths. Final scores
+are within ~0.005 bpb of C2 on everything: Rust +0.0054 and Fortran +0.0049 (the largest), Haskell -0.0030, Lua
++0.0030, the rest within 0.0006. Instruct 1.0414 (C2 1.0419), chat 0.8707 (0.8709); English and code unchanged
+(1.0774 / 0.7049). Mean kept 0.0303 (C2 0.0314), prose 0.0065 (0.0067). The audit separates cleanly again:
+switching off one stage's modules removes only its own specialty's gain (Haskell 1.032 -> 1.143, Lua 0.887 ->
+0.948, Fortran 1.006 -> 1.088, Rust 0.724 -> 0.770); switching off instruct takes instruct back to 1.111 and chat
+to 0.893; switching off chat leaves instruct at 1.045.
+
+**Replies: no.** On the 12 prompt-file questions (temperature 0.7, same seed per prompt in every variant):
+- **Answers are wrong with or without the specialty modules.** No variant of C2s gets any of the 12 right, and
+  neither does C1s. C1s's diabetes list happens to name two real symptoms (fatigue, weight loss); C2s says "high
+  blood sugar levels and weight gain" inside an otherwise wrong answer (an autoimmune disease of the colon).
+- **Specialty modules alone (`-instruct+chat`)** continue the specialty's kind of text instead of answering.
+  Diabetes gets insulin-producing cells, β-cells and blood sugar (wrong: type 1). Mars gets NASA missions and the
+  Mars Science Laboratory. Kant gets philosophy-sounding prose. Fortran gets subroutine documentation. The
+  vocabulary is topical, but there is still no answer and no code.
+- **They change little on short chat questions.** For 6 of the 12 the first 30 characters of the reply are the
+  same as the base model's (same seed); the modules learned ~3% on their own texts, a small shift in the odds.
+- **Everything on (`all`)** answers in form, like C1s; for 4 of 12 the reply opens exactly as C1s's does ("There
+  are two ways to play a C major chord on the guitar", "Type 2 diabetes is an autoimmune disease that usually
+  affects the lining of ..."). The instruct and chat modules decide the reply. C2s's answers are a little plainer
+  than C1s's (fewer numbered lists).
+- **No variant writes code.** The Rust, Lua and Fortran questions get prose about functions and vectors.
+
+**Reading:** at 136M parameters and 1B tokens of pretraining, a few million tokens per specialty moves its
+held-out text by 6-9% in bpb for code languages and under 1% for prose (style, terms, common phrasing), not enough knowledge for correct answers to come out
+in any form. The modular split still works as measured (separate, removable, no forgetting); what is missing is
+knowledge, which more scale or more data per specialty would have to supply. Untested ways to check that the
+knowledge is there but not reachable: prompts written in the specialty's own style (a code comment, a textbook
+sentence to complete) instead of chat questions.
 
 ### Future plan, unscheduled (owner, Nov 2): more languages as modules
 Not queued; nothing to run until the owner schedules it. Measured Nov 2 on the base model (held-out samples,

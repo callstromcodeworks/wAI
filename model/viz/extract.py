@@ -2,8 +2,8 @@
 attention per layer and head, the router's choice per token (with capacity drops), the grown modules' gates,
 layer-by-layer predictions (logit lens), final predictions, module usage per dataset and parameter counts.
 
-    python model/viz/extract.py                       # base model + C1s's grown modules -> runs/viz/data.json
-    python model/viz/extract.py --run runs/forgetting/C2s_spec_instruct_chat
+    python model/viz/extract.py                       # base model + C2s's grown modules -> runs/viz/data.json
+    python model/viz/extract.py --run runs/forgetting/C1s_instruct_chat --out runs/viz/data_C1s.json
     python model/viz/build.py                         # -> runs/viz/index.html (data inlined, one file)
 
 --run is a continual run saved with --save (forgetting.py); its base export is the base model. Each prompt is run
@@ -30,7 +30,8 @@ from tokenizer import VOCABS, Tokenizer
 from train import SDPA_BACKENDS
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--run", default="runs/forgetting/C1s_instruct_chat", help="continual run saved with --save")
+ap.add_argument("--run", default="runs/forgetting/C2s_spec_instruct_chat", help="continual run saved with --save "
+                "(default: C2s, the best saved model; see BEST.md)")
 ap.add_argument("--out", default="runs/viz/data.json")
 a = ap.parse_args()
 OUT = a.out
@@ -207,8 +208,16 @@ cfgd = {k: getattr(cfg, k) for k in ("n_layer", "n_head", "n_kv_head", "d_model"
                                       "n_modules", "n_shared", "module_dim", "module_layers", "module_heads",
                                       "module_kv_heads", "top_k", "capacity", "logit_softcap", "attn_scale", "seq_len",
                                       "vocab_size", "head_dim")}
+# the run's own scores (start -> end of every stage) for the grown-modules chapter, if its result file is here
+res = os.path.join(MODEL, "runs", "forgetting", f"continual_{meta['name']}.json")
+scores = None
+if os.path.exists(res):
+    curve = json.load(open(res))["curve"]
+    scores = {n: [round(curve[0][n], 4), round(curve[-1][n], 4)]
+              for n in meta["domains"].split(",") + ["fineweb-edu", "code"] if n in curve[0]}
 json.dump({"config": cfgd, "params": groups, "block_shapes": blk, "bank_shapes": bank, "skip_w":
            [round(float(v), 3) for v in model.skip_w.tolist()], "grown_layout": meta["layout"],
-           "grown_domains": meta["domains"].split(","), "prompts": prompts, "usage": usage,
+           "grown_domains": meta["domains"].split(","), "grown_name": meta["name"], "grown_scores": scores,
+           "prompts": prompts, "usage": usage,
            "route_bias": [round(float(v), 3) for v in model.route_bias.tolist()]}, open(OUT, "w"))
 print("wrote", OUT, os.path.getsize(OUT) // 1024, "KB")

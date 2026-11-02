@@ -3,9 +3,11 @@ model, by the model with some stages' modules switched off, and by the full mode
 
     python model/samples.py runs/forgetting/C1_save                      # -> runs/forgetting/C1_save/samples.md
     python model/samples.py runs/forgetting/C1_save --variants base,-chat,all --n 4
+    python model/samples.py runs/forgetting/C2s_spec_instruct_chat --prompts model/prompts/specialties.txt \
+        --variants base,-instruct+chat,-chat,all --n 2 --out samples_specialties.md
 
 Prompts: --n held-out first turns from each instruct/chat domain in the run (val.npy, never trained on; the
-person's reply is shown for reference) plus a few fixed ones. A variant is "base" (no grown modules), "all", or
+person's reply is shown for reference) plus a few fixed ones, or the lines of a --prompts file instead of those. A variant is "base" (no grown modules), "all", or
 "-a+b" (all but the modules grown in the stages of domains a and b). Sampling: temperature --temp, top-k --top_k,
 the same seed for every variant; a reply ends at <|endoftext|> or where the model starts the next "User:" turn."""
 import argparse
@@ -73,6 +75,8 @@ def main():
     ap.add_argument("--temp", type=float, default=0.7)
     ap.add_argument("--top_k", type=int, default=40)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--prompts", default="", help="file of prompts, one per line (# comments), instead of the fixed ones")
+    ap.add_argument("--out", default="samples.md", help="file name, written in the run's directory")
     a = ap.parse_args()
     model, meta = load_grown(a.run)
     tok = Tokenizer(VOCABS["ec32k"])
@@ -82,7 +86,11 @@ def main():
     variants = a.variants.split(",") if a.variants else ["base"] + [f"-{d}" for d in talk] * (len(talk) > 1) + ["all"]
     rng = np.random.default_rng(a.seed)
     prompts = [(f"{d} (held out)", p, ref) for d in talk for p, ref in held_out(d, a.n, tok, rng)]
-    prompts += [("fixed", p, None) for p in FIXED]
+    if a.prompts:
+        lines = [x.strip() for x in open(a.prompts, encoding="utf-8")]
+        prompts += [("prompt file", x, None) for x in lines if x and not x.startswith("#")]
+    else:
+        prompts += [("fixed", p, None) for p in FIXED]
     bias = {key: g.bias.detach().clone() for key, g in model.grown_gates.items()}
 
     def use(variant):  # switch modules off by gate bias, as the audit in forgetting.py does
@@ -105,7 +113,7 @@ def main():
             out += [f"**{v}:** {r}", ""]
             print(f"[{i + 1}/{len(prompts)}] {v}: {r[:100]!r}", flush=True)
     use("all")
-    path = os.path.join(a.run, "samples.md")
+    path = os.path.join(a.run, a.out)
     open(path, "w").write("\n".join(out))
     print("wrote", path)
 

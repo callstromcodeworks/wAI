@@ -1,5 +1,7 @@
 # Handoff: brain-model research (state as of Oct 31, 2026, morning Central)
 
+**Which variant is best so far, with the numbers: `model/BEST.md`** (one page; start there).
+
 Read this first, then `model/H200_PLAN.md` (the full results log, every run and decision in order) and
 `model/LOCAL_PLAN.md` (the local RTX 4070 phase, from Oct 31). The owner's
 memory files (copied to the new machine's Claude memory folder) carry standing rules: security, time format
@@ -67,10 +69,13 @@ A, B, C, D, D2, E, the data-worth runs and the specialty-memory test. #3 (sleep 
   (model/episodic.py, `--memory_tokens`); queue in model/cls_queue.sh (tmux `cls`).
 
 ## Next steps, in order
-0. **Next run, planned and NOT started (the owner starts it): C2s_spec_instruct_chat**, C2 again with `--save`,
-   then sample replies on one question per specialty, to see whether specialty knowledge comes through in chat
-   form. Step-by-step resume instructions: model/LOCAL_PLAN.md "Next run: C2s" (the queue line is in
-   model/cls_queue.sh, commented out; samples.py needs a `--prompts FILE` option first). After that: step 3.
+0. **C2s_spec_instruct_chat (done Nov 2, 10:01 AM - 12:02 PM): do the specialties come through in chat? No.**
+   C2 again with `--save` (scores match C2 within ~0.005 bpb, a second noise check; instruct 1.0414, chat 0.8707).
+   On one question per specialty (model/prompts/specialties.txt) no variant answers correctly. The specialty modules
+   alone write the specialty's kind of text (β-cells for diabetes, NASA missions for Mars) but don't answer; with
+   instruct + chat on, replies have the assistant form and often open exactly as C1s's (no specialties) do; no
+   variant writes code. At this size the specialties hold style and terms, not knowledge. Details: LOCAL_PLAN.md
+   "C2s". The 3D page (model/viz) now shows C2s's 72 modules (republished). Next: step 3 or the unscheduled step 4.
 1. Complementary-learning loop (step 2, running locally): each specialty enters episodic memory as it arrives;
    after wake + sleep the memory is re-keyed and releases what the modules now predict (p >= 0.5). Questions: does
    memory add on top of consolidated modules; does release keep the gain; which gate (fixed, entropy, dissonance)

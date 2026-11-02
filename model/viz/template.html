@@ -146,7 +146,7 @@ main { position: relative; min-width: 0; min-height: 0; }
     <div class="row">
       <span class="label-sm">Prompt</span>
       <span class="row" id="prompts"></span>
-      <label class="switch" for="grownSw"><input type="checkbox" id="grownSw"> Grown modules (C1s: instruct + chat)</label>
+      <label class="switch" for="grownSw"><input type="checkbox" id="grownSw"> <span id="grownLbl">Grown modules</span></label>
     </div>
     <div class="toks" id="toks" aria-label="Tokens: pick one to follow"></div>
   </div>
@@ -228,6 +228,26 @@ const FLOOR = {};                  // stage -> y
   y -= GAP + 4; FLOOR.out = y;
 })();
 const ATT_X = -16, MLP_X = 16, LENS_X = 84, TABLE_X = -78;
+// grown modules of the saved run: names, depths, a camera that frames them, and the run's own scores
+const G = (function () {
+  const lay = DATA.grown_layout, doms = DATA.grown_domains, TALK = { instruct: "Dolly-15k instructions", chat: "OpenAssistant conversations" };
+  const count = {}, depthsOf = lay.map((keys) => keys.map((k) => +k.split("_")[0]));
+  depthsOf.flat().forEach((d) => { count[d] = (count[d] || 0) + 2; });
+  const depths = Object.keys(count).map(Number).sort((a, b) => a - b), spec = doms.filter((d) => !TALK[d]);
+  const summary = spec.length > 2 ? [`${spec.length} specialties`, ...doms.filter((d) => TALK[d])].join(" + ") : doms.join(" + ");
+  const span = (ds) => ds.length > 1 && ds[ds.length - 1] - ds[0] === ds.length - 1 ? `${ds[0]}–${ds[ds.length - 1]}` : ds.join(", ");
+  const ys = depths.map((d) => FLOOR["b" + d]), yMid = (Math.max(...ys) + Math.min(...ys)) / 2;
+  const rowW = Math.max(...depths.map((d) => count[d] * (count[d] > 8 ? 2.4 : 3)));
+  const name = (DATA.grown_name || "C1s_instruct_chat").split("_")[0], sc = DATA.grown_scores;
+  const g = (n) => `${sc[n][0].toFixed(3)} → ${sc[n][1].toFixed(3)}`, f = (n) => `${n} ${g(n)}`;
+  return {
+    count, depths, summary, name, stages: depths.map((d) => "b" + d),
+    what: (d) => TALK[d] || `${d} (specialty text)`,
+    stageList: doms.map((d, s) => `${TALK[d] ? d + " (" + TALK[d] + ")" : d}, depths ${span(depthsOf[s])}`).join("; "),
+    cam: { target: [0, yMid + (depths.length > 3 ? 6 : 0), -12], theta: 2.75, phi: 1.08, radius: 70 + Math.max(0, Math.max(...ys) - Math.min(...ys) - 24) * 1.3 + Math.max(0, rowW - 12) * 0.8 },
+    scores: sc ? `<p>In that run held-out text went, in bits per byte (lower is better): ${doms.filter((d) => sc[d]).map(f).join(", ")}. ${sc.code ? `General English ${g("fineweb-edu")}, general code ${g("code")}.` : ""}</p>` : "",
+  };
+})();
 
 function gridTex(cells) {
   const c = document.createElement("canvas"); c.width = c.height = 64;
@@ -388,20 +408,22 @@ function build() {
       tip: { title: `U-net skip: block ${src} → block ${dst}`, lines: [`block ${src}'s output is added before block ${dst}`, `weight ${wgt.toFixed(2)}`, wgt < -0.5 ? "the source is the stream itself here: this shrinks it to 7%" : ""].filter(Boolean) } }, 0.75);
     label(`skip ${wgt.toFixed(2)}`, -W / 4, (FLOOR["b" + src] + FLOOR["b" + dst]) / 2, z0 + out - 1.2, { h: 1.3, mono: true, part: "skips", stage: "skip", color: TH.css("muted") });
   });
-  // grown modules (continual learning), behind the stream at depths 4-6
+  // grown modules (continual learning), behind the stream at the depths each stage was placed; one centred row per
+  // depth, tighter when a depth holds more than 8; with more than 2 stages each stage gets its own shade of green
   GROWN.length = 0;
   if (state.grown && r.grown) {
-    const lay = DATA.grown_layout, doms = DATA.grown_domains;
+    const lay = DATA.grown_layout, doms = DATA.grown_domains, used = {};
     lay.forEach((keys, s) => keys.forEach((key) => {
-      const d = +key.split("_")[0], y = FLOOR["b" + d];
+      const d = +key.split("_")[0], y = FLOOR["b" + d], n = G.count[d], sp = n > 8 ? 2.4 : 3, z = -depth / 2 - 4;
+      const col = TH.grown.clone().offsetHSL(lay.length > 2 ? (s / (lay.length - 1) - 0.5) * 0.2 : 0, 0, 0);
       for (let j = 0; j < 2; j++) {
-        const x = -4.5 + (s * 2 + j) * 3, z = -depth / 2 - 4;
-        for (let p = 0; p < 3; p++) box(2.2, 0.25, 2.2, x, y + 0.9 - p * 0.75, z, TH.grown, { part: "grown", stage: "b" + d,
-          tip: { title: `Grown module (${doms[s]}), depth ${d}`, lines: [`stage ${s + 1}: ${doms[s] === "instruct" ? "Dolly-15k instructions" : "OpenAssistant conversations"}`, "added after block " + d + ", base model frozen", "its gate opens per token"] } }, 0.85);
+        const i = used[d] = (used[d] ?? -1) + 1, x = (i - (n - 1) / 2) * sp;
+        for (let p = 0; p < 3; p++) box(sp - 0.8, 0.25, sp - 0.8, x, y + 0.9 - p * 0.75, z, col, { part: "grown", stage: "b" + d,
+          tip: { title: `Grown module (${doms[s]}), depth ${d}`, lines: [`stage ${s + 1}: ${G.what(doms[s])}`, "added after block " + d + ", base model frozen", "its gate opens per token"] } }, 0.85);
         GROWN.push({ key, j, x, y, z, s });
       }
     }));
-    label("grown: instruct · chat", 0, FLOOR.b4 + 3, -depth / 2 - 4, { h: 1.1, part: "grown", stage: "b4", color: TH.css("grown") });
+    label("grown: " + G.summary, 0, FLOOR["b" + G.depths[0]] + 3, -depth / 2 - 4, { h: 1.1, part: "grown", stage: "b" + G.depths[0], color: TH.css("grown") });
   }
   // output floor: top-5 bars sit in dyn
   world.add(dyn);
@@ -492,7 +514,7 @@ function flyTo(p) {
 let needs = true;
 function frame(now) {
   if (tween) {
-    let k = Math.min(1, (now - tween.t0) / tween.dur); const e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+    let k = Math.max(0, Math.min(1, (now - tween.t0) / tween.dur));  // rAF time can trail performance.now() const e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
     cam.target.lerpVectors(tween.from.target, tween.to.target, e);
     cam.theta = tween.from.theta + (tween.to.theta - tween.from.theta) * e;
     cam.phi = tween.from.phi + (tween.to.phi - tween.from.phi) * e;
@@ -605,10 +627,10 @@ const CH = [
     html: () => `<p>Blocks 3–7 combine what the bank added. <b>U-net skips</b> (the tubes behind the stream) carry early outputs down: block 0's output joins before block 7 (weight ${DATA.skip_w[0].toFixed(2)}), block 1's before block 6 (${DATA.skip_w[1].toFixed(2)}), block 2's before block 5 (${DATA.skip_w[2].toFixed(2)}).</p>
       <p>Block 3's skip has weight <b>${DATA.skip_w[3].toFixed(2)}</b>, and its source is the stream itself at that point, so it shrinks the stream to 7% before block 4. Every block reads a normalised copy, so this makes what blocks 4–7 write count for far more. The model learned that on its own.</p>
       <p>In other configurations a critic reads the stream before block 6 and corrects it; that critic is off in this model, so blocks 6 and 7 are ordinary blocks.</p>` },
-  { title: "Grown modules: learning without forgetting", cam: { target: [0, -88, -12], theta: 2.75, phi: 1.08, radius: 70 }, focus: (u) => u.part === "grown" || ["b4", "b5", "b6"].includes(u.stage) && (u.part === "stream" || u.part === "sel"), grown: true,
+  { title: "Grown modules: learning without forgetting", cam: G.cam, focus: (u) => u.part === "grown" || G.stages.includes(u.stage) && (u.part === "stream" || u.part === "sel"), grown: true,
     html: () => `<p>The project's continual-learning runs teach the model new skills by <b>growing new modules</b> and freezing everything else, so nothing it knew can be overwritten.</p>
-      <p>Switched on here: the modules grown in run C1s for instructions (Dolly-15k, stage 1) and conversation (OpenAssistant, stage 2), two per stage at each of depths 4, 5 and 6, ${fmtM(P.grown)} parameters. Each has its own gate per token; the bars above the green stacks show the selected token's gates.</p>
-      <p>In that run held-out instruction text went from 1.125 to 1.027 bits per byte and conversation from 0.925 to 0.861, with no change on general English or code. Compare the guesses with the switch off and on.</p>` },
+      <p>Switched on here: the modules grown in run ${G.name}, one stage per kind of text, two modules per stage at each of the three depths where that text most disagreed with the model's first impression: ${G.stageList}. ${fmtM(P.grown)} parameters in all. Each has its own gate per token; the bars above the green stacks show the selected token's gates.</p>
+      ${G.scores}<p>Compare the guesses with the switch off and on.</p>` },
   { title: "The prediction", cam: { target: [-8, -128, 0], theta: 0.75, phi: 1.02, radius: 112 }, focus: (u) => u.stage === "out" || u.part === "lens" || u.part === "wte",
     html: () => `<p>At the bottom the stream is RMS-normalised and multiplied by the <b>same 32,768 × 768 table</b> used at the top (tied embeddings), giving a score for every token in the vocabulary. Scores are soft-capped, 15 · tanh(s / 15), and a softmax turns them into probabilities.</p>
       <p>The bars are the top five for the selected token. The column on the right shows the same readout after every block: watch the guess sharpen in the last blocks.</p>` },
@@ -663,6 +685,7 @@ function renderToks() {
 }
 function selectTok(t) { state.tok = t; renderToks(); buildDyn(); inspect(); }
 function refresh(full) { if (full) build(); else buildDyn(); renderToks(); inspect(); showChapter(state.chapter, true); }
+$("grownLbl").textContent = `Grown modules (${G.name}: ${G.summary})`;
 $("grownSw").addEventListener("change", (e) => { state.grown = e.target.checked; refresh(true); });
 function showChapter(i, keepCam) {
   state.chapter = i; const c = CH[i];

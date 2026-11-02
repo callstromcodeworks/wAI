@@ -13,7 +13,7 @@ o200k_base and cl100k_base** on held-out English and code. Any rank prefix of it
 smaller exact BPE vocabulary (`Tokenizer::ec_prefix`). See [vocab/README.md](vocab/README.md).
 
 [model/](model/README.md) trains GPT models on these vocabularies and measures the trade-off
-between weight size and KV cache.
+between weight size and KV cache. The best variant so far, with its numbers: [model/BEST.md](model/BEST.md).
 
 ## Running the experiments on a rented Linux GPU
 
