@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BrainGPT, Inside</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* layout: a guided-tour column on the left, the 3D model fills the rest; prompt, toggle and token strip float over it */
+  --bg: #e8ebef;
+  --surface: #f7f8fa;
+  --ink: #1a2028;
+  --muted: #5b6573;
+  --line: #d0d6de;
+  --weight: #4a7abd;
+  --route: #cf7419;
+  --grown: #2c8a5b;
+  --neg: #3a69b0;
+  --pos: #c54d26;
+  --zero: #f1f2f4;
+  --display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11151b; --surface: #181d25; --ink: #e4e8ee; --muted: #97a1af; --line: #2a313c;
+    --weight: #6f9ad6; --route: #f09c42; --grown: #4fbf86; --neg: #5b8fdb; --pos: #e8693d; --zero: #1d232c;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11151b; --surface: #181d25; --ink: #e4e8ee; --muted: #97a1af; --line: #2a313c;
+  --weight: #6f9ad6; --route: #f09c42; --grown: #4fbf86; --neg: #5b8fdb; --pos: #e8693d; --zero: #1d232c;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg); color: var(--ink); font: 15px/1.55 var(--body);
+  display: grid; grid-template-columns: minmax(330px, 400px) 1fr; overflow: hidden;
+}
+aside {
+  background: var(--surface); border-right: 1px solid var(--line); overflow-y: auto;
+  display: flex; flex-direction: column; gap: 18px; padding: 20px 20px 28px;
+}
+header h1 { font: 600 26px/1.1 var(--display); margin: 0 0 6px; letter-spacing: 0.01em; text-wrap: balance; }
+header p { margin: 0; color: var(--muted); font-size: 13.5px; }
+.nav { display: flex; align-items: center; gap: 8px; }
+.nav button, .chip, .tok {
+  font: 500 13px/1 var(--body); color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 6px; padding: 7px 10px; cursor: pointer;
+}
+.nav button:hover, .chip:hover, .tok:hover { border-color: var(--muted); }
+.nav button:disabled { opacity: 0.4; cursor: default; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--route); outline-offset: 2px; }
+.nav select { flex: 1; min-width: 0; font: 500 13px/1.2 var(--body); color: var(--ink); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+.chapter h2 { font: 600 21px/1.2 var(--display); margin: 0 0 8px; text-wrap: balance; }
+.chapter .num { font: 500 12px/1 var(--mono); color: var(--muted); display: block; margin-bottom: 6px; }
+.chapter p { margin: 0 0 10px; max-width: 65ch; }
+.chapter b { font-weight: 600; }
+.chapter code, .mono { font-family: var(--mono); font-size: 0.9em; }
+.ptable { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.ptable td { padding: 3px 0; border-bottom: 1px solid var(--line); }
+.ptable td:last-child { text-align: right; font-family: var(--mono); }
+.card { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; background: var(--bg); display: flex; flex-direction: column; gap: 10px; }
+.card h3 { font: 600 13px/1.2 var(--body); margin: 0; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.selected { font: 500 16px/1.3 var(--mono); }
+.selected .pos { color: var(--muted); font-size: 12.5px; font-family: var(--body); }
+.bars { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 8px; align-items: center; font-size: 13px; font-variant-numeric: tabular-nums; }
+.bars .t { font-family: var(--mono); white-space: pre; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
+.bars .bar { height: 8px; border-radius: 2px; background: var(--weight); min-width: 1px; }
+.bars .bar.grown { background: var(--grown); }
+.bars .bar.route { background: var(--route); }
+.bars .v { font-family: var(--mono); color: var(--muted); font-size: 12px; text-align: right; }
+.pill { font: 500 11px/1 var(--body); padding: 3px 6px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+.pill.on { border-color: var(--route); color: var(--route); }
+.pill.off { text-decoration: line-through; }
+.routes { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13px; }
+.lens { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 10px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.lens .k { color: var(--muted); }
+.lens .t { font-family: var(--mono); white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+.lens .v { font-family: var(--mono); color: var(--muted); font-size: 12px; text-align: right; }
+.heat { display: grid; grid-template-columns: 74px repeat(32, 1fr); gap: 1px; font: 10px/1 var(--mono); margin-top: 6px; }
+.heat .rl { font-family: var(--body); font-size: 11px; color: var(--muted); padding-right: 4px; display: flex; align-items: center; justify-content: flex-end; }
+.heat .c { aspect-ratio: 1; border-radius: 1px; }
+.heat .c.top { outline: 1.5px solid var(--ink); outline-offset: -1.5px; }
+.heat .cl { color: var(--muted); text-align: center; font-size: 8px; padding-bottom: 2px; }
+.note { font-size: 12.5px; color: var(--muted); }
+main { position: relative; min-width: 0; min-height: 0; }
+#view { position: absolute; inset: 0; }
+#view canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+#view canvas:active { cursor: grabbing; }
+.overlay { position: absolute; left: 16px; right: 16px; top: 14px; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.overlay > * { pointer-events: auto; }
+.row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.switch { display: inline-flex; align-items: center; gap: 8px; font: 500 13px/1 var(--body); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+.switch input { accent-color: var(--grown); margin: 0; }
+.toks { display: flex; flex-wrap: wrap; gap: 3px; max-width: 900px; }
+.tok { font: 13px/1 var(--mono); padding: 5px 6px; background: var(--surface); white-space: pre; }
+.tok[aria-pressed="true"] { background: var(--route); color: #fff; border-color: var(--route); }
+.label-sm { font-size: 12px; color: var(--muted); }
+.legend { position: absolute; left: 16px; bottom: 14px; display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--muted);
+  background: color-mix(in srgb, var(--surface) 88%, transparent); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; max-width: calc(100% - 32px); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 18px; height: 10px; border-radius: 2px; display: inline-block; }
+.hint { position: absolute; right: 16px; bottom: 14px; font-size: 12px; color: var(--muted); }
+#tip { position: absolute; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 6px; padding: 8px 10px; font-size: 12.5px; line-height: 1.45; max-width: 300px; box-shadow: 0 4px 16px rgb(0 0 0 / 0.15); display: none; z-index: 5; }
+#tip b { font-weight: 600; display: block; margin-bottom: 2px; }
+#tip .m { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+#err { display: none; position: absolute; inset: 40% 20% auto; background: var(--surface); border: 1px solid var(--pos); padding: 12px; border-radius: 8px; }
+@media (max-width: 860px) {
+  body { grid-template-columns: 1fr; grid-template-rows: 62% 38%; overflow: hidden; }
+  aside { order: 2; border-right: 0; border-top: 1px solid var(--line); }
+  main { order: 1; }
+  .hint { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
+</head>
+<body>
+<aside>
+  <header>
+    <h1>BrainGPT, inside</h1>
+    <p>The wAI project's 136M-parameter model with a routed module bank, run on real prompts. Every colored slab holds the numbers it produced.</p>
+  </header>
+  <div class="nav">
+    <button id="prev" type="button" aria-label="Previous chapter">&larr;</button>
+    <select id="chsel" aria-label="Chapter"></select>
+    <button id="next" type="button" aria-label="Next chapter">&rarr;</button>
+  </div>
+  <section class="chapter" id="chapter" aria-live="polite"></section>
+  <section class="card" id="inspect" aria-label="Selected token"></section>
+</aside>
+<main>
+  <div id="view"></div>
+  <div class="overlay">
+    <div class="row">
+      <span class="label-sm">Prompt</span>
+      <span class="row" id="prompts"></span>
+      <label class="switch" for="grownSw"><input type="checkbox" id="grownSw"> Grown modules (C1s: instruct + chat)</label>
+    </div>
+    <div class="toks" id="toks" aria-label="Tokens: pick one to follow"></div>
+  </div>
+  <div class="legend" aria-label="Legend">
+    <span><i class="sw" style="background: var(--weight); opacity: 0.7"></i>weights</span>
+    <span><i class="sw" style="background: linear-gradient(90deg, var(--neg), var(--zero), var(--pos))"></i>activations &minus; / +</span>
+    <span><i class="sw" style="background: linear-gradient(90deg, var(--zero), var(--pos))"></i>attention</span>
+    <span><i class="sw" style="background: var(--route)"></i>selected token, its route</span>
+    <span><i class="sw" style="background: var(--grown)"></i>grown modules</span>
+  </div>
+  <div class="hint">Drag to orbit &middot; right-drag or shift-drag to pan &middot; scroll to zoom &middot; click a slab to pick a token</div>
+  <div id="tip" role="tooltip"></div>
+  <div id="err"></div>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+"use strict";
+const DATA = /*DATA*/null;
+const CFG = DATA.config;
+const $ = (id) => document.getElementById(id);
+window.addEventListener("error", (e) => { const el = $("err"); el.style.display = "block"; el.textContent = "Error: " + e.message; });
+
+// ---------- data ----------
+function bytes(b64) { const s = atob(b64); const a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return a; }
+function q8(o) { const a = new Int8Array(bytes(o.b64).buffer); const out = new Float32Array(a.length); const k = o.scale / 127; for (let i = 0; i < a.length; i++) out[i] = a[i] * k; return out; }
+function u8(o) { const a = bytes(o.b64); const out = new Float32Array(a.length); for (let i = 0; i < a.length; i++) out[i] = a[i] / 255; return out; }
+const cache = new Map();
+function run() {
+  const key = state.prompt + (state.grown ? "g" : "b");
+  if (!cache.has(key)) {
+    const r = DATA.prompts[state.prompt][state.grown ? "grown" : "base"];
+    const snaps = r.snaps.map((s) => {
+      const d = q8(s); const T = s.shape[0], Dm = s.shape[1];
+      const absv = Array.from(d, Math.abs).sort((a, b) => a - b);
+      const robust = absv[Math.floor(absv.length * 0.99)] || 1;
+      let mean = 0; for (let t = 0; t < T; t++) { let n = 0; for (let j = 0; j < Dm; j++) { const v = d[t * Dm + j]; n += v * v; } mean += Math.sqrt(n) / T; }
+      return { name: s.name, data: d, T, D: Dm, robust, mean };
+    });
+    cache.set(key, { r, snaps, attn: r.attn.map((a) => ({ data: u8(a), shape: a.shape })) });
+  }
+  return cache.get(key);
+}
+const fmtP = (p) => (p >= 0.1 ? (p * 100).toFixed(0) : p >= 0.01 ? (p * 100).toFixed(1) : (p * 100).toFixed(2)) + "%";
+const showTok = (s) => s === "<|endoftext|>" ? "<eot>" : s.replace(/\n/g, "↵").replace(/ /g, "·");
+const fmtM = (n) => (n / 1e6).toFixed(n >= 1e7 ? 1 : 2) + "M";
+
+// ---------- theme ----------
+let TH = {};
+function readTheme() {
+  const cs = getComputedStyle(document.documentElement);
+  for (const k of ["bg", "surface", "ink", "muted", "line", "weight", "route", "grown", "neg", "pos", "zero"]) TH[k] = new THREE.Color(cs.getPropertyValue("--" + k).trim());
+  TH.css = (k) => cs.getPropertyValue("--" + k).trim();
+}
+
+// ---------- scene ----------
+const view = $("view");
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+view.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 1, 0.5, 3000);
+let world = new THREE.Group(); scene.add(world);
+const amb = new THREE.AmbientLight(0xffffff, 0.78); scene.add(amb);
+const sun = new THREE.DirectionalLight(0xffffff, 0.45); sun.position.set(60, 120, 80); scene.add(sun);
+
+const DU = 1 / 64;                 // scene units per model dimension
+const W = CFG.d_model * DU;        // 12: the stream's width
+const TZ = 0.5;                    // scene units per token
+const L = CFG.n_layer;
+const R = CFG.n_modules - CFG.n_shared;
+const GAP = 12;
+const FLOOR = {};                  // stage -> y
+(function layout() {
+  let y = 0; FLOOR.emb = y;
+  for (let i = 0; i < L; i++) {
+    if (i === CFG.trunk_layers) { y -= GAP + 2; FLOOR.bank = y; y -= 2; }
+    y -= GAP; FLOOR["b" + i] = y;
+  }
+  y -= GAP + 4; FLOOR.out = y;
+})();
+const ATT_X = -16, MLP_X = 16, LENS_X = 84, TABLE_X = -78;
+
+function gridTex(cells) {
+  const c = document.createElement("canvas"); c.width = c.height = 64;
+  const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, 64, 64);
+  g.strokeStyle = "rgba(0,0,0,0.28)"; g.lineWidth = 2; g.strokeRect(0, 0, 64, 64);
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4; return t;
+}
+const GRID = gridTex();
+const all = [];  // every material we dim, with its resting opacity
+let inDyn = false;  // objects made by buildDyn are dropped and remade when the selection changes
+function track(obj, ud) {
+  obj.userData = Object.assign(obj.userData || {}, ud, { dyn: inDyn });
+  const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+  for (const m of mats) { m.transparent = true; m.userData.base = m.opacity; }
+  all.push(obj); return obj;
+}
+function weightPanel(w, d, x, y, z, ud, tint) {
+  const tex = GRID.clone(); tex.needsUpdate = true; tex.repeat.set(Math.max(1, w), Math.max(1, d));
+  const m = new THREE.MeshLambertMaterial({ color: tint || TH.weight, map: tex, opacity: 0.62, side: THREE.DoubleSide });
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, 0.18, d), m);
+  mesh.position.set(x, y, z); world.add(mesh); return track(mesh, ud);
+}
+function lerpColor(a, b, t) { return [a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t]; }
+function dataPlane(cols, rows, fill, w, d, x, y, z, ud) {
+  const px = new Uint8Array(cols * rows * 4);
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    const rgb = fill(c, r); const i = (r * cols + c) * 4;
+    px[i] = rgb[0] * 255; px[i + 1] = rgb[1] * 255; px[i + 2] = rgb[2] * 255; px[i + 3] = 255;
+  }
+  const tex = new THREE.DataTexture(px, cols, rows, THREE.RGBAFormat);
+  tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.LinearFilter; tex.needsUpdate = true;
+  const m = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, opacity: 1 });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, d), m);
+  mesh.rotation.x = -Math.PI / 2; mesh.position.set(x, y, z); world.add(mesh);
+  const edge = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.PlaneGeometry(w, d)), new THREE.LineBasicMaterial({ color: TH.muted, opacity: 0.5 }));
+  edge.rotation.x = -Math.PI / 2; edge.position.set(x, y, z); world.add(edge); track(edge, { part: ud.part, stage: ud.stage });
+  return track(mesh, ud);
+}
+function label(text, x, y, z, opt = {}) {
+  const size = opt.size || 40, font = `${opt.weight || 500} ${size}px ${opt.mono ? "IBM Plex Mono, monospace" : "IBM Plex Sans, sans-serif"}`;
+  const c = document.createElement("canvas"); const g = c.getContext("2d"); g.font = font;
+  const tw = Math.ceil(g.measureText(text).width) + 16; c.width = tw; c.height = size + 16;
+  g.font = font; g.textBaseline = "middle";
+  if (opt.bg) { g.fillStyle = opt.bg; g.fillRect(0, 0, c.width, c.height); }
+  g.fillStyle = opt.color || TH.css("ink"); g.fillText(text, 8, c.height / 2 + 1);
+  const tex = new THREE.CanvasTexture(c); tex.minFilter = THREE.LinearFilter;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false, opacity: 1 }));
+  const h = opt.h || 1.6; sp.scale.set(h * c.width / c.height, h, 1);
+  sp.center.set(opt.ax ?? 0.5, opt.ay ?? 0.5);
+  sp.position.set(x, y, z); world.add(sp); return track(sp, { part: opt.part || "label", stage: opt.stage });
+}
+function tube(points, radius, color, ud, opacity = 0.95) {
+  const curve = points.length === 3 ? new THREE.QuadraticBezierCurve3(...points) : new THREE.CatmullRomCurve3(points);
+  const m = new THREE.MeshLambertMaterial({ color, opacity, emissive: color, emissiveIntensity: 0.35 });
+  const mesh = new THREE.Mesh(new THREE.TubeGeometry(curve, 40, radius, 8, false), m); world.add(mesh); return track(mesh, ud);
+}
+function box(w, h, d, x, y, z, color, ud, opacity = 0.9) {
+  const m = new THREE.MeshLambertMaterial({ color, opacity });
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); mesh.position.set(x, y, z); world.add(mesh); return track(mesh, ud);
+}
+const tz = (t, T) => (t - (T - 1) / 2) * TZ;
+
+let dyn = new THREE.Group();   // the parts that follow the selected token
+const state = { prompt: 0, grown: false, tok: 0, chapter: 0 };
+
+function build() {
+  scene.remove(world); world = new THREE.Group(); scene.add(world); all.length = 0;
+  renderer.setClearColor(TH.bg);
+  const { r, snaps, attn } = run();
+  const T = r.tokens.length, depth = T * TZ;
+  // stream slabs, one per stage, in the stream's own colors
+  const stageOf = (name) => name === "embedding" ? "emb" : name === "after module bank" ? "bank" : "b" + name.split(" ")[1];
+  for (const s of snaps) {
+    const st = stageOf(s.name), y = FLOOR[st];
+    dataPlane(s.D, s.T, (c, row) => {
+      const v = s.data[(s.T - 1 - row) * s.D + c] / s.robust;
+      const t = Math.min(1, Math.abs(v)) ** 0.75;
+      return lerpColor(TH.zero, v < 0 ? TH.neg : TH.pos, t);
+    }, W, depth, 0, y, 0, { part: "stream", stage: st, kind: "slab", snap: s, T,
+      tip: { title: s.name === "embedding" ? "Residual stream: embedding" : `Residual stream: ${s.name}`, lines: [`${T} tokens × 768 dimensions`, `typical size per token ${s.mean.toFixed(1)}`] } });
+  }
+  // faint rails: it is one stream
+  const rails = new THREE.BufferGeometry().setFromPoints([-1, 1].flatMap((sx) => [-1, 1].flatMap((sz) => [new THREE.Vector3(sx * W / 2, FLOOR.emb, sz * depth / 2), new THREE.Vector3(sx * W / 2, FLOOR.out, sz * depth / 2)])));
+  const railMesh = new THREE.LineSegments(rails, new THREE.LineBasicMaterial({ color: TH.muted, opacity: 0.35 })); world.add(railMesh); track(railMesh, { part: "stream" });
+  // tokens
+  r.tokens.forEach((tk, t) => label(showTok(tk), -W / 2 - 0.8, FLOOR.emb + 0.4, tz(t, T), { mono: true, h: 0.62, ax: 1, part: "tokens", stage: "emb" }));
+  label("tokens in", 0, FLOOR.emb + 3.2, -depth / 2 - 1.5, { h: 1.3, weight: 600, part: "tokens", stage: "emb" });
+  // embedding table and the tied output head
+  const TBL = 40;
+  weightPanel(W, TBL, TABLE_X, FLOOR.emb, 0, { part: "wte", stage: "emb", tip: { title: "Token embedding table", lines: ["32,768 tokens × 768 (25.2M parameters)", "drawn shortened: to scale it would be 512 units long", "the same matrix makes the output scores (tied)"] } });
+  label("embedding table 32,768 × 768", TABLE_X, FLOOR.emb + 2.4, -TBL / 2 - 1, { h: 1.2, part: "wte", stage: "emb" });
+  weightPanel(W, TBL, TABLE_X, FLOOR.out, 0, { part: "wte", stage: "out", tip: { title: "Output head (the embedding table again)", lines: ["768 → 32,768 scores, one per token", "scores soft-capped: 15 · tanh(s / 15)", "then softmax into probabilities"] } });
+  label("same table, as output head", TABLE_X, FLOOR.out + 2.4, -TBL / 2 - 1, { h: 1.2, part: "wte", stage: "out" });
+  const tiePts = [new THREE.Vector3(TABLE_X - W / 2 - 1, FLOOR.emb, 0), new THREE.Vector3(TABLE_X - W / 2 - 1, FLOOR.out, 0)];
+  const tie = new THREE.Line(new THREE.BufferGeometry().setFromPoints(tiePts), new THREE.LineDashedMaterial({ color: TH.muted, dashSize: 1.5, gapSize: 1.2, opacity: 0.7 }));
+  tie.computeLineDistances(); world.add(tie); track(tie, { part: "wte" });
+  // floor labels
+  label("embedding", -W / 2 - 1, FLOOR.emb - 1.6, depth / 2 + 2, { h: 1.7, ax: 1, part: "label", stage: "emb", color: TH.css("muted") });
+  for (let i = 0; i < L; i++) {
+    const kind = i < CFG.trunk_layers ? "trunk" : "integrator";
+    label(`block ${i} · ${kind}`, -W / 2 - 1, FLOOR["b" + i] - 1.6, depth / 2 + 2, { h: 1.7, ax: 1, stage: "b" + i, color: TH.css("muted") });
+  }
+  label("module bank", -W / 2 - 1, FLOOR.bank - 1.6, depth / 2 + 2, { h: 1.7, ax: 1, stage: "bank", color: TH.css("muted") });
+  label("output", -W / 2 - 1, FLOOR.out - 1.6, depth / 2 + 2, { h: 1.7, ax: 1, stage: "out", color: TH.css("muted") });
+  // blocks: attention on the left, MLP on the right
+  const hd = CFG.head_dim, qd = CFG.n_head * hd, kvd = CFG.n_kv_head * hd;
+  for (let i = 0; i < L; i++) {
+    const y = FLOOR["b" + i], st = "b" + i;
+    const qz = qd * DU, kz = kvd * DU, tot = qz + 2 * kz;
+    weightPanel(W, qz, ATT_X, y, -tot / 2 + qz / 2, { part: "attn", stage: st, tip: { title: `Block ${i}: query weights`, lines: ["768 → 768: 6 heads × 128", "queries RMS-normalised, rotated by position (RoPE)"] } });
+    weightPanel(W, kz, ATT_X, y, -tot / 2 + qz + kz / 2, { part: "attn", stage: st, tip: { title: `Block ${i}: key weights`, lines: ["768 → 256: 2 key heads × 128, shared by 3 query heads each"] } }, TH.weight.clone().offsetHSL(0.05, 0, 0.05));
+    weightPanel(W, kz, ATT_X, y, -tot / 2 + qz + kz * 1.5, { part: "attn", stage: st, tip: { title: `Block ${i}: value weights`, lines: ["768 → 256: 2 value heads × 128", i ? "mixed with block 0's values (value residual)" : "block 0's values are reused by every later block"] } }, TH.weight.clone().offsetHSL(0.1, 0, 0.08));
+    const A = attn[i], S = 6.2;
+    for (let h = 0; h < CFG.n_head; h++) {
+      const col = h % 3, rowi = Math.floor(h / 3);
+      const x = ATT_X - W / 2 - 3 - S / 2 - col * (S + 1), z = (rowi - 0.5) * (S + 1);
+      dataPlane(T, T, (c, row) => {
+        const q = T - 1 - row; const p = c <= q ? A.data[(h * T + q) * T + c] : 0;
+        return lerpColor(TH.zero, TH.pos, Math.pow(p, 0.55));
+      }, S, S, x, y, z, { part: "attn", stage: st, kind: "attn", block: i, head: h, T, A,
+        tip: { title: `Block ${i}, head ${h + 1}`, lines: [`uses key/value head ${Math.floor(h / 3) + 1}`, "rows: each token · columns: the earlier tokens it reads"] } });
+    }
+    const px = ATT_X - W / 2 - 3 - 3 * (S + 1) - 2 - W / 2;
+    weightPanel(W, W, px, y, 0, { part: "attn", stage: st, tip: { title: `Block ${i}: attention output`, lines: ["768 → 768, added to the stream"] } });
+    const hid = CFG.d_model * CFG.mlp_ratio * DU;
+    weightPanel(W, hid, MLP_X, y, 0, { part: "mlp", stage: st, tip: { title: `Block ${i}: MLP up-projection`, lines: ["768 → 3,072, then squared ReLU"] } });
+    weightPanel(hid, W, MLP_X + W / 2 + 3 + hid / 2, y, 0, { part: "mlp", stage: st, tip: { title: `Block ${i}: MLP down-projection`, lines: ["3,072 → 768, added to the stream", "with attention: 6.3M parameters per block"] } });
+  }
+  // module bank
+  const yb = FLOOR.bank, RAD = 30;
+  weightPanel(W, R * DU * 4, MLP_X, yb, 0, { part: "router", stage: "bank", tip: { title: "Router", lines: ["768 → 32 scores per token", "top 2 modules fire, gates = softmax of their 2 scores", "a small per-module bias helps idle modules get picked"] } }, TH.route.clone().lerp(TH.weight, 0.5));
+  label("router", MLP_X, yb + 1.6, -R * DU * 2 - 1.2, { h: 1.1, part: "router", stage: "bank" });
+  const counts = new Array(R).fill(0);
+  r.router.route.forEach((picks) => picks.forEach((p) => { if (p.kept) counts[p.m]++; }));
+  const maxc = Math.max(1, ...counts);
+  MODPOS.length = 0;
+  for (let e = -1; e < R; e++) {
+    const a = ((e + 1) / (R + 1)) * Math.PI * 2 + Math.PI / 2;
+    const x = Math.cos(a) * RAD, z = Math.sin(a) * RAD;
+    MODPOS.push([x, z]);
+    const shared = e < 0, use = shared ? 1 : counts[e] / maxc;
+    const base = shared ? TH.ink.clone().lerp(TH.bg, 0.35) : TH.zero.clone().lerp(TH.weight, 0.25 + 0.75 * use);
+    const names = ["reads 768 → 256", "transformer layer 1 (4 heads)", "transformer layer 2 (4 heads)", "writes 256 → 768"];
+    for (let p = 0; p < 4; p++) {
+      const mesh = box(4, 0.3, 4, x, yb + 1.5 - p, z, base, { part: "modules", stage: "bank", module: e,
+        tip: { title: shared ? "Shared module (fires for every token)" : `Module ${e}`, lines: [names[p], "1.8M parameters per module", shared ? "" : `${counts[e]} of this prompt's tokens routed here`].filter(Boolean) } }, 0.9);
+      mesh.userData.baseColor = base.clone();
+    }
+    label(shared ? "shared" : String(e), x, yb + 3.1, z, { h: 1.4, mono: !shared, part: "modules", stage: "bank", color: TH.css("muted") });
+  }
+  // U-net skips: block j's output joins the stream before block L-1-j
+  DATA.skip_w.forEach((wgt, j) => {  // skip_w[j]: block j's output joins the stream before block L-1-j
+    const src = j, dst = L - 1 - j;
+    const z0 = -depth / 2, out = -6 - 3.5 * (DATA.skip_w.length - 1 - j);
+    const p = [new THREE.Vector3(-W / 4, FLOOR["b" + src], z0), new THREE.Vector3(-W / 4, FLOOR["b" + src], z0 + out),
+      new THREE.Vector3(-W / 4, FLOOR["b" + dst] + GAP * 0.5, z0 + out), new THREE.Vector3(-W / 4, FLOOR["b" + dst] + GAP * 0.35, z0)];
+    tube(p, 0.12 + 0.45 * Math.abs(wgt), wgt < 0 ? TH.neg : TH.muted, { part: "skips", stage: "skip",
+      tip: { title: `U-net skip: block ${src} → block ${dst}`, lines: [`block ${src}'s output is added before block ${dst}`, `weight ${wgt.toFixed(2)}`, wgt < -0.5 ? "the source is the stream itself here: this shrinks it to 7%" : ""].filter(Boolean) } }, 0.75);
+    label(`skip ${wgt.toFixed(2)}`, -W / 4, (FLOOR["b" + src] + FLOOR["b" + dst]) / 2, z0 + out - 1.2, { h: 1.3, mono: true, part: "skips", stage: "skip", color: TH.css("muted") });
+  });
+  // grown modules (continual learning), behind the stream at depths 4-6
+  GROWN.length = 0;
+  if (state.grown && r.grown) {
+    const lay = DATA.grown_layout, doms = DATA.grown_domains;
+    lay.forEach((keys, s) => keys.forEach((key) => {
+      const d = +key.split("_")[0], y = FLOOR["b" + d];
+      for (let j = 0; j < 2; j++) {
+        const x = -4.5 + (s * 2 + j) * 3, z = -depth / 2 - 4;
+        for (let p = 0; p < 3; p++) box(2.2, 0.25, 2.2, x, y + 0.9 - p * 0.75, z, TH.grown, { part: "grown", stage: "b" + d,
+          tip: { title: `Grown module (${doms[s]}), depth ${d}`, lines: [`stage ${s + 1}: ${doms[s] === "instruct" ? "Dolly-15k instructions" : "OpenAssistant conversations"}`, "added after block " + d + ", base model frozen", "its gate opens per token"] } }, 0.85);
+        GROWN.push({ key, j, x, y, z, s });
+      }
+    }));
+    label("grown: instruct · chat", 0, FLOOR.b4 + 3, -depth / 2 - 4, { h: 1.1, part: "grown", stage: "b4", color: TH.css("grown") });
+  }
+  // output floor: top-5 bars sit in dyn
+  world.add(dyn);
+  buildDyn();
+  applyFocus(true);
+}
+const MODPOS = [], GROWN = [];
+
+function buildDyn() {
+  world.remove(dyn); dyn = new THREE.Group(); world.add(dyn);
+  for (let i = all.length - 1; i >= 0; i--) if (all[i].userData.dyn) all.splice(i, 1);
+  const prevWorld = world; world = dyn; inDyn = true;
+  const { r, snaps } = run();
+  const T = r.tokens.length, t = state.tok, z = tz(t, T), depth = T * TZ;
+  // the selected token's row on every slab
+  for (const s of snaps) {
+    const st = s.name === "embedding" ? "emb" : s.name === "after module bank" ? "bank" : "b" + s.name.split(" ")[1];
+    const fr = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(W + 0.5, 0.35, TZ + 0.1)), new THREE.LineBasicMaterial({ color: TH.route, opacity: 1 }));
+    fr.position.set(0, FLOOR[st], z); world.add(fr); track(fr, { part: "sel", stage: st });
+  }
+  // lookup: the token's row in the embedding table
+  const id = r.ids[t], rowz = -20 + (id / CFG.vocab_size) * 40;
+  const lk = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(TABLE_X + W / 2, FLOOR.emb + 0.2, rowz), new THREE.Vector3(-W / 2, FLOOR.emb + 0.2, z)]), new THREE.LineBasicMaterial({ color: TH.route, opacity: 1 }));
+  world.add(lk); track(lk, { part: "wte", stage: "emb" });
+  box(W, 0.3, 0.25, TABLE_X, FLOOR.emb + 0.15, rowz, TH.route, { part: "wte", stage: "emb", tip: { title: `Row ${id.toLocaleString()} of the embedding table`, lines: [`token ${showTok(r.tokens[t])}`] } }, 1);
+  // routes into the bank
+  const yb = FLOOR.bank;
+  const picks = r.router.route[t];
+  const sx = 0, start = new THREE.Vector3(sx, yb + 0.2, z);
+  const sh = MODPOS[0];
+  tube([start, new THREE.Vector3(sh[0] / 2, yb + 6, (z + sh[1]) / 2), new THREE.Vector3(sh[0], yb + 1.8, sh[1])], 0.12, TH.muted, { part: "routes", stage: "bank", tip: { title: "Shared module", lines: ["every token, gate 1"] } }, 0.8);
+  for (const p of picks) {
+    const mp = MODPOS[p.m + 1];
+    tube([start, new THREE.Vector3(mp[0] / 2, yb + 8, (z + mp[1]) / 2), new THREE.Vector3(mp[0], yb + 1.8, mp[1])], p.kept ? 0.12 + 0.35 * p.g : 0.08, p.kept ? TH.route : TH.muted,
+      { part: "routes", stage: "bank", tip: { title: `Module ${p.m}`, lines: [`gate ${p.g.toFixed(2)}`, p.kept ? "fired" : `skipped: module full (capacity ${r.router.capacity} on this prompt)`] } }, p.kept ? 1 : 0.5);
+    box(4.6, 0.12, 4.6, mp[0], yb + 2.1, mp[1], p.kept ? TH.route : TH.muted, { part: "routes", stage: "bank" }, 1);
+  }
+  // grown gates for this token
+  if (state.grown && r.grown) for (const gm of GROWN) {
+    const g = r.grown[gm.key].gates[t][gm.j];
+    box(0.7, 0.05 + 4 * g, 0.7, gm.x, gm.y + 1.2 + (0.05 + 4 * g) / 2, gm.z, TH.grown.clone().lerp(TH.route, 0.0), { part: "grown", stage: "b" + gm.key.split("_")[0],
+      tip: { title: `Gate ${g.toFixed(2)}`, lines: [`${DATA.grown_domains[gm.s]} module ${gm.j + 1} at depth ${gm.key.split("_")[0]}`, "how much it writes for this token (0 to 1)"] } }, 1);
+  }
+  // guess by depth (logit lens), right of each block
+  for (let i = 0; i < L; i++) {
+    const [tk, p] = r.lens[i][t][0];
+    label(`${showTok(tk)}  ${fmtP(p)}`, LENS_X, FLOOR["b" + i] + 0.6, 0, { h: 2.0, mono: true, ax: 0, part: "lens", stage: "b" + i });
+  }
+  label("guess after each block", LENS_X, FLOOR.b0 + 4.5, 0, { h: 1.6, ax: 0, part: "lens", stage: "b0", color: TH.css("muted") });
+  // final prediction bars
+  const fin = r.final[t];
+  fin.forEach(([tk, p], k) => {
+    const h = 0.6 + 14 * p / fin[0][1], x = 12 + k * 6;
+    box(3, h, 3, x, FLOOR.out + h / 2, 0, k ? TH.weight : TH.route, { part: "out", stage: "out", tip: { title: `Next token ${showTok(tk)}`, lines: [`probability ${fmtP(p)}`] } }, 0.92);
+    label(showTok(tk), x, FLOOR.out + h + 1.5, 0, { h: 1.5, mono: true, part: "out", stage: "out" });
+    label(fmtP(p), x, FLOOR.out - 1.4, 2.2, { h: 1.2, mono: true, part: "out", stage: "out", color: TH.css("muted") });
+  });
+  world = prevWorld; inDyn = false;
+  applyFocus(true);
+}
+
+// ---------- focus: dim what a chapter isn't about ----------
+let focusFn = () => true;
+function applyFocus(instant) {
+  for (const o of all) {
+    const on = focusFn(o.userData);
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) m.opacity = m.userData.base * (on ? 1 : 0.13);
+  }
+  needs = true;
+}
+
+// ---------- camera ----------
+const cam = { target: new THREE.Vector3(10, -60, 0), theta: 0.9, phi: 1.2, radius: 250 };
+function placeCamera() {
+  const s = Math.sin(cam.phi);
+  camera.position.set(cam.target.x + cam.radius * s * Math.sin(cam.theta), cam.target.y + cam.radius * Math.cos(cam.phi), cam.target.z + cam.radius * s * Math.cos(cam.theta));
+  camera.lookAt(cam.target); needs = true;
+}
+let tween = null;
+const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+function flyTo(p) {
+  const to = { target: new THREE.Vector3(...p.target), theta: p.theta, phi: p.phi, radius: p.radius };
+  let dth = to.theta - cam.theta; dth = Math.atan2(Math.sin(dth), Math.cos(dth)); to.theta = cam.theta + dth;
+  if (reduced) { Object.assign(cam, to); placeCamera(); return; }
+  tween = { from: { target: cam.target.clone(), theta: cam.theta, phi: cam.phi, radius: cam.radius }, to, t0: performance.now(), dur: 1100 };
+}
+let needs = true;
+function frame(now) {
+  if (tween) {
+    let k = Math.min(1, (now - tween.t0) / tween.dur); const e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+    cam.target.lerpVectors(tween.from.target, tween.to.target, e);
+    cam.theta = tween.from.theta + (tween.to.theta - tween.from.theta) * e;
+    cam.phi = tween.from.phi + (tween.to.phi - tween.from.phi) * e;
+    cam.radius = tween.from.radius * Math.pow(tween.to.radius / tween.from.radius, e);
+    placeCamera(); if (k >= 1) tween = null;
+  }
+  if (needs) { renderer.render(scene, camera); needs = false; }
+  requestAnimationFrame(frame);
+}
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight; if (!w || !h) return;
+  renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); needs = true;
+}
+new ResizeObserver(resize).observe(view);
+
+// pointer: orbit, pan, zoom, hover, click
+const cv = renderer.domElement;
+let drag = null;
+cv.addEventListener("contextmenu", (e) => e.preventDefault());
+cv.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey, moved: 0 }; cv.setPointerCapture(e.pointerId); tween = null; });
+cv.addEventListener("pointermove", (e) => {
+  if (drag) {
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY; drag.moved += Math.abs(dx) + Math.abs(dy);
+    if (drag.pan) {
+      const right = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0), up = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1);
+      const k = cam.radius * 0.0016; cam.target.addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
+    } else { cam.theta -= dx * 0.006; cam.phi = Math.min(3.05, Math.max(0.08, cam.phi - dy * 0.006)); }
+    placeCamera(); hideTip(); return;
+  }
+  hover(e);
+});
+cv.addEventListener("pointerup", (e) => { if (drag && drag.moved < 5) pick(e); drag = null; });
+cv.addEventListener("pointerleave", hideTip);
+cv.addEventListener("wheel", (e) => { e.preventDefault(); tween = null; cam.radius = Math.min(700, Math.max(12, cam.radius * Math.exp(e.deltaY * 0.0012))); placeCamera(); }, { passive: false });
+let pinch = null;
+cv.addEventListener("touchstart", (e) => { if (e.touches.length === 2) { pinch = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); drag = null; } }, { passive: true });
+cv.addEventListener("touchmove", (e) => { if (pinch && e.touches.length === 2) { const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); cam.radius = Math.min(700, Math.max(12, cam.radius * pinch / d)); pinch = d; placeCamera(); } }, { passive: true });
+cv.addEventListener("touchend", () => { pinch = null; }, { passive: true });
+
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+function hit(e) {
+  const rc = cv.getBoundingClientRect(); ndc.set(((e.clientX - rc.left) / rc.width) * 2 - 1, -((e.clientY - rc.top) / rc.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const cands = all.filter((o) => o.isMesh && o.userData.tip && focusFn(o.userData));
+  return ray.intersectObjects(cands, false)[0];
+}
+const tip = $("tip");
+function hideTip() { tip.style.display = "none"; }
+function hover(e) {
+  const h = hit(e); if (!h) return hideTip();
+  const ud = h.object.userData; let { title, lines } = ud.tip; lines = lines.slice();
+  if (ud.kind === "slab" && h.uv) {
+    const s = ud.snap, c = Math.min(s.D - 1, Math.floor(h.uv.x * s.D)), row = Math.min(s.T - 1, Math.floor(h.uv.y * s.T)), t = s.T - 1 - row;
+    lines = [`token ${showTok(run().r.tokens[t])} (position ${t})`, `dimension ${c}: ${s.data[t * s.D + c].toFixed(2)}`].concat(lines);
+  } else if (ud.kind === "attn" && h.uv) {
+    const T = ud.T, c = Math.min(T - 1, Math.floor(h.uv.x * T)), q = T - 1 - Math.min(T - 1, Math.floor(h.uv.y * T)), tk = run().r.tokens;
+    lines = [c <= q ? `${showTok(tk[q])} reads ${showTok(tk[c])}: ${fmtP(ud.A.data[(ud.head * T + q) * T + c])}` : "the future: masked"].concat(lines);
+  }
+  tip.innerHTML = `<b></b>` + lines.map(() => `<div class="m"></div>`).join("");
+  tip.querySelector("b").textContent = title; tip.querySelectorAll(".m").forEach((el, i) => (el.textContent = lines[i]));
+  const rc = view.getBoundingClientRect(); tip.style.display = "block";
+  tip.style.left = Math.min(rc.width - 310, e.clientX - rc.left + 14) + "px"; tip.style.top = Math.min(rc.height - 120, e.clientY - rc.top + 14) + "px";
+}
+function pick(e) {
+  const h = hit(e); if (!h) return;
+  const ud = h.object.userData;
+  if ((ud.kind === "slab" || ud.kind === "attn") && h.uv) { const T = ud.T; selectTok(T - 1 - Math.min(T - 1, Math.floor(h.uv.y * T))); }
+}
+
+// ---------- chapters ----------
+const P = DATA.params, total = Object.values(P).reduce((a, b) => a + b, 0) - (P.grown || 0);
+function streamGrowth() { const s = run().snaps; return `${s[0].mean.toFixed(0)} at the embedding to ${s[s.length - 1].mean.toFixed(0)} after block 7`; }
+function dropped() { return run().r.router.route.flat().filter((p) => !p.kept).length; }
+const CH = [
+  { title: "What you're looking at", cam: { target: [6, -66, 0], theta: 0.85, phi: 1.22, radius: 255 }, focus: () => true,
+    html: () => `<p>This is <b>BrainGPT</b>, the language model from the wAI project, trained on 1 billion tokens of FineWeb-Edu text and code. Tokens enter at the top; a guess for the next token comes out at the bottom.</p>
+      <p>The colored slabs aren't decoration: the model was run on the prompt above, and each slab shows the 768 numbers it holds for every token at that point. Blue panels are weight matrices, drawn to scale (one unit per 64 numbers).</p>
+      <table class="ptable"><tbody>
+      <tr><td>Embedding table (also the output head)</td><td>${fmtM(P.wte)}</td></tr>
+      <tr><td>8 transformer blocks</td><td>${fmtM(P.blocks)}</td></tr>
+      <tr><td>Module bank: 32 routed modules</td><td>${fmtM(P.bank)}</td></tr>
+      <tr><td>Shared module</td><td>${fmtM(P.shared)}</td></tr>
+      <tr><td>Router</td><td>${(P.router / 1e3).toFixed(1)}k</td></tr>
+      <tr><td><b>Total</b></td><td><b>${fmtM(total)}</b></td></tr></tbody></table>
+      <p class="note">Pick a token in the strip above the model to follow it all the way down. The panel below always shows what happens to it.</p>` },
+  { title: "Tokens and the embedding table", cam: { target: [-34, 0, 0], theta: 0.45, phi: 0.92, radius: 82 }, focus: (u) => u.stage === "emb" || u.part === "sel" && u.stage === "emb",
+    html: () => `<p>The prompt is cut into tokens from a 32,768-entry vocabulary; <span class="mono">&lt;eot&gt;</span> marks the start of a document. Spaces show as <span class="mono">·</span> and line breaks as <span class="mono">↵</span>.</p>
+      <p>Each token picks its row of the <b>embedding table</b> (32,768 × 768, ${fmtM(P.wte)} parameters; drawn shortened, since at this scale it would be 512 units long). The row is RMS-normalised and becomes the token's first entry in the residual stream: the slab beside the token labels.</p>` },
+  { title: "The residual stream", cam: { target: [0, -62, 0], theta: 1.25, phi: 1.38, radius: 175 }, focus: (u) => u.part === "stream" || u.part === "sel" || u.part === "tokens",
+    html: () => `<p>Every token carries <b>768 numbers</b> down the model. Each part reads a normalised copy of the stream and adds its result back in; nothing overwrites it. One slab per stage, one row per token: orange is positive, blue negative, each slab scaled to its own range.</p>
+      <p>The stream grows as parts add to it: a token's typical size goes from ${streamGrowth()} on this prompt. Hover over a slab to read single values.</p>` },
+  { title: "Attention", cam: { target: [-36, -12, 0], theta: 0.3, phi: 0.62, radius: 64 }, focus: (u) => (u.part === "attn" && u.stage === "b0") || (u.part === "stream" && u.stage === "b0") || (u.part === "sel" && u.stage === "b0"),
+    html: () => `<p>Each block starts with <b>attention</b>: every token looks back at the tokens before it and pulls in what it needs. Six query heads of 128 dimensions share two key/value heads (heads 1–3 the first, 4–6 the second). Queries and keys are RMS-normalised and rotated by their position (RoPE), then compared at a fixed scale of 0.12.</p>
+      <p>The six tiles are this prompt's real attention patterns in block 0: each row is a token, each column an earlier token, brighter means more attention. The upper triangle is empty because no token can see the future. From block 1 on, each block's values are mixed with block 0's (value residual).</p>` },
+  { title: "The MLP", cam: { target: [40, -12, 2], theta: 0.55, phi: 0.72, radius: 98 }, focus: (u) => (u.part === "mlp" && u.stage === "b0") || (u.stage === "b0" && (u.part === "stream" || u.part === "sel")),
+    html: () => `<p>Then each token is processed on its own by a feed-forward network: <b>768 → 3,072 → 768</b> with a squared ReLU in between. At 4.7M parameters it is three quarters of a block's 6.3M.</p>
+      <p>Attention moves information between tokens; the MLP works on what each token now holds. The model repeats this pair eight times.</p>` },
+  { title: "The trunk", cam: { target: [10, -24, 0], theta: 0.95, phi: 1.2, radius: 145 }, focus: (u) => ["emb", "b0", "b1", "b2"].includes(u.stage) || u.part === "lens" && ["b0", "b1", "b2"].includes(u.stage),
+    html: () => `<p>Blocks 0–2 are the <b>trunk</b>: every token goes through them before anything is routed. They build the general picture the router judges by.</p>
+      <p>On the right, each block's output is read as a next-token guess (the logit lens: the output head applied early). After the trunk the guess is still vague; the panel lists it for every depth.</p>` },
+  { title: "The module bank", cam: { target: [0, -50, 0], theta: 0.65, phi: 0.82, radius: 100 }, focus: (u) => u.stage === "bank",
+    html: () => { const r = run().r; return `<p>After block 2 the stream meets the <b>module bank</b>: 32 small transformers plus one shared module. A <b>router</b> (768 → 32) scores the modules for each token; the top 2 fire, weighted by a softmax over their two scores, and the shared module fires for every token.</p>
+      <p>Each module reads 768 → 256, runs 2 transformer layers with 4 heads, and writes 256 → 768 back into the stream: ${fmtM(P.shared)} parameters each, ${fmtM(P.bank)} in the bank, 43% of the model. Any one token uses three of them, about ${fmtM(3 * P.shared)}.</p>
+      <p><b>Capacity:</b> per sequence a module takes at most 2 × tokens × 2 / 32 tokens, first come first served, and later tokens skip it. In training (1,024 tokens) that is 128 slots; this prompt has ${r.tokens.length} tokens, so only ${r.router.capacity}, and ${dropped()} firings were skipped (grey routes). Brighter modules took more of this prompt's tokens.</p>`; } },
+  { title: "What the modules learned", cam: { target: [0, -50, 0], theta: 1.5, phi: 0.45, radius: 92 }, focus: (u) => u.stage === "bank",
+    html: () => `<p>Nothing assigns a module its job; the router learns it. Counting where the router sends 16,000 tokens of each dataset shows clear specialties (an even share would be 3.1% each):</p>
+      <p><b>Module 29</b> is the code module: first for Haskell, Rust, Lua, Fortran and general code (12.6% of Lua). <b>28</b> takes web prose (medical, law, FineWeb-Edu), <b>14</b> and <b>10</b> philosophy and logic, <b>25</b> music, space and conversation, <b>8</b> instructions.</p>
+      ${heatmap()}<p class="note">Darker is a larger share; the outlined cell is each dataset's top module. Datasets: the 10 specialty benchmark, general web text and code, Dolly instructions, OpenAssistant conversations (held-out text).</p>` },
+  { title: "Integrator blocks and U-net skips", cam: { target: [-2, -88, -10], theta: 2.05, phi: 1.32, radius: 135 }, focus: (u) => ["b3", "b4", "b5", "b6", "b7"].includes(u.stage) && u.part !== "grown" || u.part === "skips",
+    html: () => `<p>Blocks 3–7 combine what the bank added. <b>U-net skips</b> (the tubes behind the stream) carry early outputs down: block 0's output joins before block 7 (weight ${DATA.skip_w[0].toFixed(2)}), block 1's before block 6 (${DATA.skip_w[1].toFixed(2)}), block 2's before block 5 (${DATA.skip_w[2].toFixed(2)}).</p>
+      <p>Block 3's skip has weight <b>${DATA.skip_w[3].toFixed(2)}</b>, and its source is the stream itself at that point, so it shrinks the stream to 7% before block 4. Every block reads a normalised copy, so this makes what blocks 4–7 write count for far more. The model learned that on its own.</p>
+      <p>In other configurations a critic reads the stream before block 6 and corrects it; that critic is off in this model, so blocks 6 and 7 are ordinary blocks.</p>` },
+  { title: "Grown modules: learning without forgetting", cam: { target: [0, -88, -12], theta: 2.75, phi: 1.08, radius: 70 }, focus: (u) => u.part === "grown" || ["b4", "b5", "b6"].includes(u.stage) && (u.part === "stream" || u.part === "sel"), grown: true,
+    html: () => `<p>The project's continual-learning runs teach the model new skills by <b>growing new modules</b> and freezing everything else, so nothing it knew can be overwritten.</p>
+      <p>Switched on here: the modules grown in run C1s for instructions (Dolly-15k, stage 1) and conversation (OpenAssistant, stage 2), two per stage at each of depths 4, 5 and 6, ${fmtM(P.grown)} parameters. Each has its own gate per token; the bars above the green stacks show the selected token's gates.</p>
+      <p>In that run held-out instruction text went from 1.125 to 1.027 bits per byte and conversation from 0.925 to 0.861, with no change on general English or code. Compare the guesses with the switch off and on.</p>` },
+  { title: "The prediction", cam: { target: [-8, -128, 0], theta: 0.75, phi: 1.02, radius: 112 }, focus: (u) => u.stage === "out" || u.part === "lens" || u.part === "wte",
+    html: () => `<p>At the bottom the stream is RMS-normalised and multiplied by the <b>same 32,768 × 768 table</b> used at the top (tied embeddings), giving a score for every token in the vocabulary. Scores are soft-capped, 15 · tanh(s / 15), and a softmax turns them into probabilities.</p>
+      <p>The bars are the top five for the selected token. The column on the right shows the same readout after every block: watch the guess sharpen in the last blocks.</p>` },
+];
+function heatmap() {
+  const u = DATA.usage, names = Object.keys(u);
+  const label = { "fineweb-edu": "web text", code: "code", instruct: "instruct", chat: "chat" };
+  let max = 0; for (const n of names) for (const v of u[n]) max = Math.max(max, v);
+  let h = `<div class="heat" role="img" aria-label="Share of router firings per module for each dataset"><div></div>`;
+  for (let e = 0; e < 32; e++) h += `<div class="cl">${e % 4 === 0 || [8, 10, 14, 25, 28, 29].includes(e) ? e : ""}</div>`;
+  for (const n of names) {
+    const top = u[n].indexOf(Math.max(...u[n]));
+    h += `<div class="rl">${label[n] || n}</div>`;
+    u[n].forEach((v, e) => { const a = Math.pow(v / max, 1.3); h += `<div class="c${e === top ? " top" : ""}" title="${label[n] || n}, module ${e}: ${(v * 100).toFixed(1)}%" style="background: color-mix(in srgb, var(--weight) ${(a * 100).toFixed(0)}%, var(--zero))"></div>`; });
+  }
+  return h + `</div>`;
+}
+
+// ---------- panel: the selected token ----------
+function inspect() {
+  const { r } = run(), t = state.tok, T = r.tokens.length;
+  const fin = r.final[t], pk = r.router.route[t];
+  const lens = r.lens.map((l, i) => `<span class="k">block ${i}</span><span class="t">${esc(showTok(l[t][0][0]))}</span><span class="v">${fmtP(l[t][0][1])}</span>`).join("");
+  let grownHtml = "";
+  if (state.grown && r.grown) {
+    const rows = [];
+    for (const [key, g] of Object.entries(r.grown)) {
+      const s = +key.split("_")[1], d = key.split("_")[0];
+      g.gates[t].forEach((v, j) => rows.push(`<span class="t">${DATA.grown_domains[s]} d${d}.${j + 1}</span><span class="bar grown" style="width:${(v * 100).toFixed(0)}%"></span><span class="v">${v.toFixed(2)}</span>`));
+    }
+    grownHtml = `<h3>Grown module gates</h3><div class="bars">${rows.join("")}</div>`;
+  }
+  $("inspect").innerHTML = `<h3>Selected token</h3>
+    <div class="selected">${esc(showTok(r.tokens[t]))} <span class="pos">position ${t} of ${T - 1}${state.grown ? " · with grown modules" : ""}</span></div>
+    <h3>Next-token guess</h3>
+    <div class="bars">${fin.map(([tk, p], k) => `<span class="t">${esc(showTok(tk))}</span><span class="bar${k ? "" : " route"}" style="width:${(p / fin[0][1] * 100).toFixed(0)}%"></span><span class="v">${fmtP(p)}</span>`).join("")}</div>
+    <h3>Module bank</h3>
+    <div class="routes"><span class="pill">shared</span>${pk.map((p) => `<span class="pill ${p.kept ? "on" : "off"}" title="${p.kept ? "fired" : "skipped: module full"}">module ${p.m} · ${p.g.toFixed(2)}</span>`).join("")}</div>
+    <h3>Guess after each block</h3><div class="lens">${lens}</div>${grownHtml}`;
+}
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---------- controls ----------
+function renderPrompts() {
+  $("prompts").innerHTML = DATA.prompts.map((p, i) => `<button type="button" class="chip" aria-pressed="${i === state.prompt}" data-i="${i}">${p.name[0].toUpperCase() + p.name.slice(1)}</button>`).join("");
+  $("prompts").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { state.prompt = +b.dataset.i; state.tok = run().r.tokens.length - 1; renderPrompts(); refresh(true); }));
+}
+function renderToks() {
+  const tk = run().r.tokens;
+  $("toks").innerHTML = tk.map((s, i) => `<button type="button" class="tok" aria-pressed="${i === state.tok}" data-i="${i}" title="position ${i}">${esc(showTok(s))}</button>`).join("");
+  $("toks").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => selectTok(+b.dataset.i)));
+}
+function selectTok(t) { state.tok = t; renderToks(); buildDyn(); inspect(); }
+function refresh(full) { if (full) build(); else buildDyn(); renderToks(); inspect(); showChapter(state.chapter, true); }
+$("grownSw").addEventListener("change", (e) => { state.grown = e.target.checked; refresh(true); });
+function showChapter(i, keepCam) {
+  state.chapter = i; const c = CH[i];
+  $("chapter").innerHTML = `<span class="num">${String(i + 1).padStart(2, "0")} / ${CH.length}</span><h2>${c.title}</h2>${c.html()}`;
+  $("chsel").value = i; $("prev").disabled = i === 0; $("next").disabled = i === CH.length - 1;
+  focusFn = c.focus; applyFocus();
+  if (!keepCam) flyTo(c.cam);
+}
+$("chsel").innerHTML = CH.map((c, i) => `<option value="${i}">${String(i + 1).padStart(2, "0")} ${c.title}</option>`).join("");
+$("chsel").addEventListener("change", (e) => goChapter(+e.target.value));
+$("prev").addEventListener("click", () => goChapter(state.chapter - 1));
+$("next").addEventListener("click", () => goChapter(state.chapter + 1));
+function goChapter(i) {
+  i = Math.max(0, Math.min(CH.length - 1, i));
+  if (CH[i].grown && !state.grown) { state.grown = true; $("grownSw").checked = true; build(); renderToks(); inspect(); }
+  showChapter(i);
+}
+document.addEventListener("keydown", (e) => {
+  if (e.target.closest("select, input")) return;
+  if (e.key === "ArrowRight" || e.key === "PageDown") goChapter(state.chapter + 1);
+  if (e.key === "ArrowLeft" || e.key === "PageUp") goChapter(state.chapter - 1);
+});
+function rethemed() { readTheme(); build(); inspect(); showChapter(state.chapter, true); }
+new MutationObserver(rethemed).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", rethemed);
+
+// ---------- start ----------
+readTheme();
+state.tok = run().r.tokens.length - 1;
+renderPrompts();
+build(); renderToks(); inspect();
+showChapter(0, true);
+Object.assign(cam, { target: new THREE.Vector3(...CH[0].cam.target), theta: CH[0].cam.theta, phi: CH[0].cam.phi, radius: CH[0].cam.radius });
+resize(); placeCamera();
+requestAnimationFrame(frame);
+document.fonts && document.fonts.ready.then(() => { build(); needs = true; });
+</script>
+</body>
+</html>

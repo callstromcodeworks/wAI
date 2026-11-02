@@ -216,6 +216,20 @@ The rerun matched C1 (instruct 1.0277 vs 1.0270, chat 0.8603 vs 0.8606).
 - Content is mostly wrong or looping (watermelon "a great source of protein", a Haskell monad explained as an
   automobile; C1 has no specialty modules): a 136M model at 1B tokens learns the form, not the knowledge.
 
+### 3D visualization (model/viz, Nov 2)
+`viz/extract.py` runs the base model plus a saved run's grown modules (default C1s) on three prompts (chat, Rust,
+prose) and records the residual stream after every stage, attention per block and head, the router's picks with
+capacity drops, grown-module gates, the logit lens and module usage on 16k tokens of each of 14 datasets;
+`viz/build.py` inlines it into `viz/template.html` (three.js) -> runs/viz/index.html. Published as the private
+artifact "BrainGPT, Inside". Found along the way:
+- The routed modules specialise without being told: module 29 is first for Haskell, Rust, Lua, Fortran and general
+  code (12.6% of Lua's firings, even share 3.1%); 28 web prose (medical, law, FineWeb-Edu); 14 and 10 philosophy
+  and logic; 25 music, space and conversation; 8 instructions.
+- U-net skip into block 4 has weight -0.93 and its source is the stream itself (block 3's output), so the stream
+  shrinks to 7% before block 4: blocks 4-7 write with ~14x more relative weight.
+- Short prompts squeeze the bank: capacity is 2 x T x 2 / 32 slots per module, 3 on a 19-token prompt (128 in
+  training), so some routes are dropped at inference on short inputs.
+
 ### Next run: C2s_spec_instruct_chat (planned Nov 2, NOT started: the owner starts it)
 **Question:** does the specialty knowledge come through when the model answers in chat form? C1s's replies had
 the assistant form but wrong content, and it has no specialty modules (a Haskell monad came out as an automobile).

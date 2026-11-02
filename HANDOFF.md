@@ -102,7 +102,8 @@ A, B, C, D, D2, E, the data-worth runs and the specialty-memory test. #3 (sleep 
 - Code: GitHub callstromcodeworks/wAI (this repo; the Linux version). Older Windows tree: worksAI (agent, phone
   cluster, home server; contains key files that must not be read or copied casually).
 - Key tools: `run.py` (setup, data, test, train --queue, status, eval, export), `model/samples.py` (sample replies
-  from a run saved with `continual --save`), `model/forgetting.py` (continual
+  from a run saved with `continual --save`), `model/viz/` (3D page of the model from a real run: extract.py -> build.py
+  -> runs/viz/index.html; published as the private artifact "BrainGPT, Inside"), `model/forgetting.py` (continual
   learning harness: `continual` with --domains, --multi_depth, --placement, --sleep_priority, --replay_source),
   `model/build_domains.py` (the 10-specialty benchmark), `model/memory_lm.py`, `model/register_diag.py`,
   `model/register_probe.py`, `model/tokenization_diag.py`, `model/tests/*_checks.py`, `model/episodic.py`
