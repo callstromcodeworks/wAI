@@ -110,3 +110,38 @@ Multi-depth growth at the most conflicted depths (code went to depths 1-3, prose
   philosophy; memory released them (philosophy final 14.9% with all episodes, 0.0% with held ones; M1 kept
   14.9% held) and the modules' philosophy score improved 0.0017 at the logic stage (M1 0.0004). What memory
   recalled verbatim, the modules took over.
+
+### M3_mddis_distill: sleep that distils memory into the modules (6:22 PM Nov 1 - 12:18 AM Nov 2; shelved)
+M2's settings + `--sleep_distill 1`. Before each sleep, memory is re-keyed with the woken model and a pool of 1,024
+windows is drawn from the specialties seen so far, beyond the text memory read (a window never finds itself).
+For every position memory's 32 neighbours are stored; per specialty the blend (lam, tau) is the best on its own
+pool windows, as in scoring. Sleep's new-material rows come from the pool, with target (1 - lam) one-hot + lam
+memory's distribution (kNN distillation, the model + memory as teacher); where memory doesn't help, lam = 0.
+Short tests (2 specialties, 20-step stages): a 16-window pool hurt (Haskell 1.1424 vs 1.1239 without
+distillation) and did so with distillation off too, so the pool was memorised (as the H200's 64/256-window sleep
+pools were); with 512 or 1,024 windows Haskell matched no distillation (1.1256, 1.1247). Peak 8.9 GB.
+Test of success vs M2: modules alone better on the code specialties, memory on top smaller, model + memory no worse.
+
+| | M2 | M3 (distillation) |
+|---|---|---|
+| modules: mean kept | 0.0319 | 0.0311 |
+| prose kept (medical, law, logic) | 0.0065 | 0.0064 |
+| English / general code drift | -0.0003 / +0.0012 | -0.0000 / +0.0016 |
+| modules alone, final: Haskell / Lua / Rust / Fortran | 1.0299 / 0.8837 / 0.7209 / 1.0002 | 1.0378 / 0.8854 / 0.7175 / 0.9961 |
+| memory on top, final (mean of 9, philosophy excluded) | 1.00% | 0.86% |
+| ... only held episodes (release p >= 0.5) | 0.82% | 0.47% |
+| model + memory, final mean bpb (9) | 0.9708 | 0.9722 |
+| gates: fixed / entropy / dissonance | 0.93 / 0.50 / 0.63% | 0.86 / 0.44 / 0.29% |
+
+- **No measurable effect: within run-to-run noise (~0.005 bpb) on every count.** Two code specialties a little
+  better (Rust, Fortran), two a little worse (Haskell 0.008, the largest gap, opened at its first sleep; Lua).
+  Memory on top is smaller, but not because the modules took its knowledge over: model + memory is no better.
+  The held-only drop is mostly Lua (2.6% -> 0.0%, as M1) and philosophy's shared passages staying held (14.6%,
+  as M1; M2 released them): release-threshold effects, which swing between runs.
+- Why it could hardly move anything: the dose was tiny (memory's distribution at 5% weight on the 10% of sleep
+  rows that are new material, ~0.5% of what sleep trains on), and the teacher barely beats the student: on the
+  pool windows model + memory beat the model by 0-2.7%, and the blend search chose the smallest weight offered
+  (0.05) at 46 of 55 specialty-sleeps and none (memory doesn't help) at the other 9.
+- **Shelved (owner, Nov 1).** A real answer would need a much larger dose and 2+ seeds of both M2 and M3 (~6 h a
+  run). Memory stays a separate component on top of the modules (as in M2). `--sleep_distill` stays in the code,
+  off by default.

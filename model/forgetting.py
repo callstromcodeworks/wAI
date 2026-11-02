@@ -58,6 +58,19 @@ def prepare(path, vocab="ec32k", val_frac=0.1, seed=0):
         print(f"{split}: {len(idx)} pages, {len(ids):,} tokens")
 
 
+def distill_term(model, hidden, r, picks, pool):
+    """Sleep distillation (kNN distillation): on pool rows the target is (1 - beta) one-hot + beta memory's
+    distribution over the next token (its k neighbours' continuations with their weights), beta per pool row.
+    hidden [B, T, d], r [B, T + 1]; picks = [(row in batch, pool row)]; pool: w [P, T, k], v [P, T, k], beta [P].
+    Returns the change to the batch's mean next-token loss (add it to the plain loss)."""
+    b = torch.tensor([p[0] for p in picks], device=hidden.device)
+    j = torch.tensor([p[1] for p in picks], device=hidden.device)
+    lp = torch.log_softmax(model.logits(hidden[b].float()), -1)  # [n, T, vocab]
+    soft = -(pool["w"][j].float() * lp.gather(-1, pool["v"][j].long())).sum(-1)
+    hard = -lp.gather(-1, r[b, 1:, None])[..., 0]
+    return (pool["beta"][j, None] * (soft - hard)).sum() / r[:, 1:].numel()
+
+
 def load_model(path):
     if not path.endswith(".pt"):  # an exported run (safetensors + JSON), e.g. one trained on a rented GPU
         import safe_checkpoint
@@ -274,7 +287,9 @@ def continual(a):
        material seen so far) at a third of the learning rate, like sleep;
     5. each stage's modules are named, separate parts (grown_at keys "depth_stage") that can be removed.
     The base and earlier stages stay frozen: only the current stage's modules (and their gates) learn.
-    --stages 1 --placement fixed is the one-shot baseline (per_stage modules spread over blocks 1, 3, 5)."""
+    --stages 1 --placement fixed is the one-shot baseline (per_stage modules spread over blocks 1, 3, 5).
+    With --memory_tokens each specialty also enters an episodic memory (episodic.py); --sleep_distill makes sleep
+    distil it: on replayed specialty text the target mixes the true next token with memory's prediction."""
     from brain import ModuleBank
     torch.manual_seed(a.seed)
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -341,13 +356,20 @@ def continual(a):
         return src[st:st + T + 1]
 
     pools = {}  # sleep priority: replay drawn from tagged windows instead of at random
+    picks = []  # sleep distillation: (row in the batch, pool row) for each new row of the last batch
 
     def batch(new_sources, new_share):
         rows = []
-        for _ in range(a.batch):
+        picks.clear()
+        for b in range(a.batch):
             if rng.random() < new_share:
-                rows.append(pools["new"][rng.integers(len(pools["new"]))] if "new" in pools else
-                            window(new_sources[rng.integers(len(new_sources))]))
+                if "distill" in pools:  # new material comes from the pool that carries memory's predictions
+                    j = int(rng.integers(len(pools["distill"]["rows"])))
+                    picks.append((b, j))
+                    rows.append(pools["distill"]["rows"][j])
+                else:
+                    rows.append(pools["new"][rng.integers(len(pools["new"]))] if "new" in pools else
+                                window(new_sources[rng.integers(len(new_sources))]))
             else:
                 rows.append(pools["old"][rng.integers(len(pools["old"]))] if "old" in pools else
                             window(general[0] if len(general) == 1 or rng.random() < 0.6 else general[1]))
@@ -369,6 +391,8 @@ def continual(a):
                 with torch.autocast("cuda", torch.bfloat16), sdpa_kernel(SDPA_BACKENDS, set_priority=True):
                     out = fwd(r[:, :-1])
                 loss = model.train_loss(out, r[:, 1:], draft_weight=0.0, critic_weight=0.0, balance_weight=0.0)[0]
+                if picks:
+                    loss = loss + distill_term(model, out[0], r, picks, pools["distill"])
                 if not torch.isfinite(loss):  # never train on, or report, a diverged model
                     raise SystemExit(f"non-finite loss at step {step}: run stopped, results not saved")
                 (loss / a.accum).backward()
@@ -530,7 +554,9 @@ def continual(a):
     if a.replay_source == "recall":  # old material comes only from the model's own memories, wake and sleep
         general = [recall(a.recall_seqs)]
     curve = [evaluate("start")]
-    mem, mem_curve = None, []
+    mem, mem_curve, distilled = None, [], []
+    if a.sleep_distill and not a.memory_tokens:
+        raise SystemExit("--sleep_distill needs --memory_tokens")
     if a.memory_tokens:  # the hippocampus: each specialty is read into episodic memory as it arrives (episodic.py)
         if not a.domains:
             raise SystemExit("--memory_tokens needs --domains")
@@ -538,6 +564,48 @@ def continual(a):
         mem = EpisodicMemory(model, token_bytes, k=a.memory_k)
         mem_texts = dict(val_ids, **{src: load_shard(os.path.join(HERE, "data", vocab, src, "val_000000.bin"))[0]
                                      for src in ("fineweb-edu", "code")})
+
+        def prepare_distill(st):
+            """Before sleep: re-key memory with the woken model, draw --distill_rows windows from the specialties
+            seen so far (beyond the text memory read, so a window never finds itself), and store memory's k
+            neighbours and weights for every position. The blend (lam, tau) is the best on each specialty's own
+            windows, as in scoring; where memory doesn't help, beta = 0 (plain replay)."""
+            from episodic import encode
+            mem.reencode()
+            per = max(1, a.distill_rows // (st + 1))
+            rows_, w_, v_, beta_, info = [], [], [], [], {}
+            for k in range(st + 1):
+                ids = stages[k]
+                lo = int(a.memory_tokens) if len(ids) - int(a.memory_tokens) > 2 * T else 0
+                rows = np.stack([ids[o:o + T + 1] for o in rng.integers(lo, len(ids) - T - 1, per)])
+                parts = []  # (distances, next tokens of the neighbours, true next token, log p_model) per 128 rows
+                for c in range(0, per, 128):
+                    h, y, lp = encode(model, rows[c:c + 128].astype(np.int64))
+                    d, i = mem.recall(h)
+                    parts.append((d, mem.vals[i].int(), y, lp))
+                    del h, i
+                d, v, y, lp = (torch.cat(t) for t in zip(*parts))
+                del parts
+                match = (v == y[:, None]).float()
+                best = (lp.sum().item(), 0.0, 1.0)  # log-likelihood of the model alone
+                for tau in (1.0, 3.0, 10.0, 30.0, 100.0):
+                    pm = (torch.softmax(-d / tau, -1) * match).sum(-1)
+                    for lam in (0.05, 0.1, 0.2, 0.3, 0.5):
+                        ll = torch.log((1 - lam) * lp.exp() + lam * pm + 1e-12).sum().item()
+                        if ll > best[0]:
+                            best = (ll, lam, tau)
+                ll, lam, tau = best
+                rows_.append(rows)
+                w_.append(torch.softmax(-d / tau, -1).half().view(per, T, -1))
+                v_.append(v.view(per, T, -1))
+                beta_ += [lam * a.sleep_distill] * per
+                info[names[k]] = dict(lam=lam, tau=tau, gain=round((ll - lp.sum().item()) / -lp.sum().item(), 5))
+                del d, v, y, lp, match
+            pools["distill"] = dict(rows=np.concatenate(rows_), w=torch.cat(w_), v=torch.cat(v_),
+                                    beta=torch.tensor(beta_, device="cuda"))
+            print("  sleep distillation: " + " | ".join(f"{n[:7]} lam {x['lam']} tau {x['tau']} ({x['gain']:+.2%})"
+                                                       for n, x in info.items()), flush=True)
+            return info
 
         def mem_evaluate(tag, held=None):
             r = dict(tag=tag, episodes=len(mem), episodes_held=mem.n_held(), held=held)
@@ -599,6 +667,8 @@ def continual(a):
         if a.sleep_priority == "dissonance":
             tag_for_sleep(seen)
         if a.consolidate_steps:  # sleep: replay only, the new material seen so far mixed with general text
+            if a.sleep_distill:  # ... carrying memory's predictions, to be distilled into this stage's modules
+                distilled.append(prepare_distill(st))
             train(params, a.consolidate_steps, seen, a.sleep_new, lr / 3)
         pools.clear()
         if a.grow:
@@ -625,7 +695,8 @@ def continual(a):
                placement=a.placement, init=a.init, consolidate_steps=a.consolidate_steps, overgrow=a.overgrow,
                stage_steps=a.stage_steps, layout=layout, curve=curve, pruned=pruned, audit=audit,
                replay=a.replay, sleep_new=a.sleep_new, memory_tokens=a.memory_tokens, memory_prune=a.memory_prune,
-               memory_k=a.memory_k, memory_curve=mem_curve)
+               memory_k=a.memory_k, memory_curve=mem_curve, sleep_distill=a.sleep_distill, distill_rows=a.distill_rows,
+               distilled=distilled)
     os.makedirs(OUT_DIR, exist_ok=True)
     json.dump(res, open(os.path.join(OUT_DIR, f"continual_{a.name}.json"), "w"), indent=1)
 
@@ -697,6 +768,10 @@ def main():
                     "the model now predicts with p(next) >= this (0 = keep all)")
     ap.add_argument("--memory_k", type=int, default=32, help="continual, memory: neighbours recalled")
     ap.add_argument("--memory_eval_tokens", type=int, default=100_000, help="continual, memory: tokens scored per text")
+    ap.add_argument("--sleep_distill", type=float, default=0, help="continual, memory: sleep distils memory's predictions "
+                    "(scale on the blend weight chosen per specialty; 1 = the best blend's lam; 0 = off)")
+    ap.add_argument("--distill_rows", type=int, default=1024, help="continual, sleep distillation: windows in the pool "
+                    "(small pools get memorised: 16 windows hurt in a short test, as 64/256-window sleep pools did)")
     a = ap.parse_args()
     a.eval_at = {int(s) for s in a.eval_at.split(",")}
     if a.command == "prepare":

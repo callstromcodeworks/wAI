@@ -70,12 +70,15 @@ A, B, C, D, D2, E, the data-worth runs and the specialty-memory test. #3 (sleep 
 1. Complementary-learning loop (step 2, running locally): each specialty enters episodic memory as it arrives;
    after wake + sleep the memory is re-keyed and releases what the modules now predict (p >= 0.5). Questions: does
    memory add on top of consolidated modules; does release keep the gain; which gate (fixed, entropy, dissonance)
-   decides best when to consult memory. Then: sleep that distils memory's predictions into the modules.
+   decides best when to consult memory. Then: sleep that distils memory's predictions into the modules (M3).
    M1 (neurogenesis + memory) done Oct 31: memory adds 1.4-3.0% on top of the modules for code, ~0.2% for prose;
    release at p >= 0.5 loses Lua's gain; a fixed blend beats the entropy and dissonance gates.
    M2 (multi-depth at the most conflicted depths + memory) done Nov 1: better on every count (modules 0.0319 vs
    0.0277 kept, prose 3x, memory on top 1.00% vs 0.87% and 0.82% vs 0.46% after release); still a fixed blend
    best. Numbers in LOCAL_PLAN.md.
+   M3 (M2 + sleep that distils memory's predictions into the modules, `--sleep_distill`) done Nov 2: no measurable
+   effect (everything within ~0.005 bpb of M2; the dose was ~0.5% of the sleep loss and memory barely beats the
+   model on the replay windows). Shelved; memory stays a separate component on top of the modules.
    Topics overlap (philosophy's held-out text recurs in logic's training text, 18% of windows): expected and
    harmless to the model, so no deduplication; only read memory's philosophy gain after logic arrives (15%) as
    verbatim recall, not generalisation.

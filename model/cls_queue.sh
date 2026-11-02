@@ -11,6 +11,8 @@ M="--memory_tokens 5e5 --memory_prune 0.5 --memory_eval_tokens 100000"
 jobs=(
   "continual $B --domains $D $X --placement fixed $M --name M1_neuro_mem"
   "continual $B --domains $D $X --multi_depth 1 --placement dissonance $M --name M2_mddis_mem"
+  # M2 + sleep that distils memory's predictions into the stage's modules (compare with M2)
+  "continual $B --domains $D $X --multi_depth 1 --placement dissonance $M --sleep_distill 1 --name M3_mddis_distill"
 )
 mkdir -p runs/forgetting
 for j in "${jobs[@]}"; do

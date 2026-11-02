@@ -121,3 +121,24 @@ ok(used == 2 * 2 * 18 * T, "a changed model is caught by the weight fingerprint"
 
 ok(all(b.is_pinned() for b in mem.blocks) and sum(len(b) for b in mem.blocks) == len(mem) == len(mem.held),
    "keys sit in pinned blocks, one per text, aligned with values and held flags")
+
+# sleep distillation (forgetting.distill_term): the fast term equals the loss against the explicit target
+# (1 - beta) one-hot + beta memory distribution, built in full over the vocabulary
+from forgetting import distill_term
+B, P, K = 4, 3, 8
+hid = torch.randn(B, T, D, device="cuda", requires_grad=True)
+r = torch.randint(0, V, (B, T + 1), device="cuda")
+pool = dict(w=torch.softmax(torch.randn(P, T, K, device="cuda"), -1).half(), v=torch.randint(0, V, (P, T, K), device="cuda").int(),
+            beta=torch.tensor([0.3, 0.0, 0.5], device="cuda"))
+picks = [(0, 2), (2, 0), (3, 1)]
+term = distill_term(model, hid, r, picks, pool)
+lp = torch.log_softmax(model.logits(hid.float()), -1)
+y = r[:, 1:]
+target = torch.nn.functional.one_hot(y, V).float()
+for b, j in picks:
+    mem_dist = torch.zeros(T, V, device="cuda").scatter_add_(1, pool["v"][j].long(), pool["w"][j].float())
+    target[b] = (1 - pool["beta"][j]) * target[b] + pool["beta"][j] * mem_dist
+explicit = -(target * lp).sum(-1).mean() - (-lp.gather(-1, y[..., None])).mean()
+term.backward()
+ok(abs(term.item() - explicit.item()) < 1e-5 and term.item() != 0 and bool(torch.isfinite(hid.grad).all()),
+   "sleep distillation term equals the loss against the explicit mixed target", f"{term.item():.6f} vs {explicit.item():.6f}")
