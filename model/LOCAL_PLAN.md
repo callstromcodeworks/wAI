@@ -267,3 +267,35 @@ C2's model has the 10 specialty modules plus instruct and chat, but C2 didn't sa
 5. Read: on specialty questions, does "all" in C2s get more right than "all" in C1s (same chat skill, no
    specialty modules) and than "-instruct+chat" (specialty knowledge, no chat form)? Write up here and in
    HANDOFF.md; commit and push only when the owner asks.
+
+### Future plan, unscheduled (owner, Nov 2): more languages as modules
+Not queued; nothing to run until the owner schedules it. Measured Nov 2 on the base model (held-out samples,
+~60k tokens each; oasst2 messages for spoken languages, the 6 local github-code-clean files for code):
+
+| | base bpb | bytes / token |
+|---|---|---|
+| English (oasst2) | 0.99 | 4.2 |
+| code the base knows: C, Java, HTML, CSS, C# | 0.27-0.70 | 3.4-4.6 |
+| less familiar code: Perl 0.98, Makefile 1.00, Shell 1.04, PowerShell 1.05, Julia 1.12, Haskell 1.14, Assembly 1.16, Dockerfile 1.33, Fortran 1.34, TeX 1.38 | 0.98-1.38 | 2.4-3.3 |
+| Spanish 1.84, French 1.94, Portuguese 2.00, German 2.22, Italian 2.25, Catalan 2.47 | 1.84-2.47 | 2.9-3.2 |
+| Russian / Chinese (2-3 bytes per character, so bpb flatters them) | 1.50 / 2.19 | 2.9 / 1.8 |
+
+Estimates (to be replaced by measurement):
+- **Programming languages (fairly confident):** the four code specialties gained 6-9% each (Haskell from 1.13: 9%;
+  Rust from 0.77: 6%), more the less familiar the language, with no forgetting. Best candidates: TeX, Assembly,
+  Shell, Makefile, Perl (expect 6-10%); C/Java/HTML/CSS would gain little. Local data (6 of 880 files) covers TeX,
+  Shell, Perl, Makefile, Go, Ruby, Scala; Assembly and PowerShell are borderline (~2M tokens); Julia and Dockerfile
+  would need more files (a download).
+- **Spoken languages (less confident):** Latin-script languages start at ~2x English's bpb, so expect larger
+  gains than code (guess 15-30% per 3M tokens; outside anything measured), learning common words and phrasing,
+  not fluency. The tokenizer is English-heavy and frozen in continual learning (Chinese gets under one character
+  per token), so Chinese and Russian should learn less per token than Spanish or French. Spanish in oasst2
+  (28k messages, on disk) is enough for one stage; other languages need a download (e.g. FineWeb-2).
+- **Costs, either kind:** ~10 min per language on the 4070; 6 modules (11M parameters, ~8% of the base) per
+  stage. Grown modules run densely (every one on every token, gated afterwards), so each language adds ~14% to
+  the work per token; ten would more than double it. Sparse routing for grown modules would fix that (code change).
+  Crowding: instruct/chat learned ~15% less after 10 specialties (one run); code languages all land at depths 1-3.
+
+**Cheapest test when scheduled:** one continual run, Spanish (oasst2 `es`, needs a build_domains source like
+`chat` filtered by language) then TeX (github-code-clean `TeX`, add to CODE in build_domains.py), M2/C2 settings,
+no memory: ~25 min, no download.

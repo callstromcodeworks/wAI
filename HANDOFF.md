@@ -97,6 +97,8 @@ A, B, C, D, D2, E, the data-worth runs and the specialty-memory test. #3 (sleep 
 2. Prose: answered on the H200 (multi-depth at the most conflicted depths, prose 2.9x; 3x longer stages = depth
    spread). Revisit only if the memory loop changes the picture.
 3. #3 sleep during pretraining (fixed data, several passes, dissonance-prioritised replay).
+4. Unscheduled (owner, Nov 2): more languages as modules (programming and spoken). Base-model measurements,
+   estimates and the cheapest test (Spanish + TeX, ~25 min) in model/LOCAL_PLAN.md "Future plan, unscheduled".
 
 ## Where things are
 - Code: GitHub callstromcodeworks/wAI (this repo; the Linux version). Older Windows tree: worksAI (agent, phone
