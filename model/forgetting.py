@@ -289,6 +289,7 @@ def continual(a):
         stages = [np.load(os.path.join(ddir, n, "train.npy")) for n in names]
         vals = {n: rows_from(np.load(os.path.join(ddir, n, "val.npy")), 10 ** 9) for n in names}
         a.stages = len(names)
+        val_ids = {n: np.load(os.path.join(ddir, n, "val.npy")) for n in names}
     else:
         ids_train = np.load(os.path.join(HERE, "data", vocab, "crawl", "train.npy"))
         stages = np.array_split(ids_train, a.stages)
@@ -352,6 +353,11 @@ def continual(a):
                             window(general[0] if len(general) == 1 or rng.random() < 0.6 else general[1]))
         return torch.from_numpy(np.stack(rows).astype(np.int64)).cuda()
 
+    # training steps run compiled (fixed shapes); scoring, placement and recall stay eager. Each stage's new
+    # modules change the graph, so it recompiles once per stage (wake and sleep share it)
+    torch._dynamo.config.recompile_limit = max(torch._dynamo.config.recompile_limit, 64)
+    fwd = torch.compile(model, dynamic=False) if a.compile else model
+
     def train(params, steps, new_sources, new_share, lr):
         opt = torch.optim.AdamW(params, lr=lr, betas=(0.8, 0.95), eps=1e-10)
         model.train()
@@ -361,7 +367,7 @@ def continual(a):
             for _ in range(a.accum):
                 r = batch(new_sources, new_share)
                 with torch.autocast("cuda", torch.bfloat16), sdpa_kernel(SDPA_BACKENDS, set_priority=True):
-                    out = model(r[:, :-1])
+                    out = fwd(r[:, :-1])
                 loss = model.train_loss(out, r[:, 1:], draft_weight=0.0, critic_weight=0.0, balance_weight=0.0)[0]
                 if not torch.isfinite(loss):  # never train on, or report, a diverged model
                     raise SystemExit(f"non-finite loss at step {step}: run stopped, results not saved")
@@ -524,11 +530,30 @@ def continual(a):
     if a.replay_source == "recall":  # old material comes only from the model's own memories, wake and sleep
         general = [recall(a.recall_seqs)]
     curve = [evaluate("start")]
+    mem, mem_curve = None, []
+    if a.memory_tokens:  # the hippocampus: each specialty is read into episodic memory as it arrives (episodic.py)
+        if not a.domains:
+            raise SystemExit("--memory_tokens needs --domains")
+        from episodic import EpisodicMemory
+        mem = EpisodicMemory(model, token_bytes, k=a.memory_k)
+        mem_texts = dict(val_ids, **{src: load_shard(os.path.join(HERE, "data", vocab, src, "val_000000.bin"))[0]
+                                     for src in ("fineweb-edu", "code")})
+
+        def mem_evaluate(tag, held=None):
+            r = dict(tag=tag, episodes=len(mem), episodes_held=mem.n_held(), held=held)
+            for n, ids in mem_texts.items():
+                r[n] = mem.score(ids, a.memory_eval_tokens)
+            print(f"  memory {tag:10s} {len(mem):,} episodes ({mem.n_held():,} held) | model -> all / held: " + " | ".join(
+                f"{n[:7]} {r[n]['model']:.4f}->{r[n]['memory']:.4f}/{r[n]['held']:.4f}" for n in mem_texts), flush=True)
+            return r
     fixed = [int(d) for d in a.depths.split(",")] if a.depths else list(range(1, len(model.blocks) - 1, 2))
     seen, layout, pruned = [], [], []
     for st in range(a.stages):
         new = stages[st]
         seen.append(new)
+        if mem is not None:  # instant: read the new text once, score everything before any training
+            mem.arrive(names[st], new, a.memory_tokens)
+            mem_curve.append(mem_evaluate(f"arrive {st + 1}"))
         if not a.grow:  # standard baseline: fine-tune the whole model, same schedule (learn, then sleep)
             params, keys = [p for p in model.parameters()], []
         elif a.adapter:  # standard baseline: new adapters each stage, same parameter budget and schedule
@@ -580,6 +605,9 @@ def continual(a):
             for p in params:
                 p.requires_grad_(False)  # matured: this stage's modules stop changing
         curve.append(evaluate(f"stage {st + 1} ({','.join(keys)})"))
+        if mem is not None:  # the model changed: re-key the memory (and release what it has now learned)
+            held = mem.reencode(prune=a.memory_prune or None)
+            mem_curve.append(mem_evaluate(f"stage {st + 1}", held))
     audit = []  # each part is removable: silence it and see what it held
     for keys in layout:
         for key in keys:
@@ -595,7 +623,9 @@ def continual(a):
                stages=a.stages,
                per_stage=a.per_stage,
                placement=a.placement, init=a.init, consolidate_steps=a.consolidate_steps, overgrow=a.overgrow,
-               stage_steps=a.stage_steps, layout=layout, curve=curve, pruned=pruned, audit=audit)
+               stage_steps=a.stage_steps, layout=layout, curve=curve, pruned=pruned, audit=audit,
+               replay=a.replay, sleep_new=a.sleep_new, memory_tokens=a.memory_tokens, memory_prune=a.memory_prune,
+               memory_k=a.memory_k, memory_curve=mem_curve)
     os.makedirs(OUT_DIR, exist_ok=True)
     json.dump(res, open(os.path.join(OUT_DIR, f"continual_{a.name}.json"), "w"), indent=1)
 
@@ -660,6 +690,13 @@ def main():
     ap.add_argument("--eval_at", default="25,50,100,200,300")
     ap.add_argument("--replay", type=float, default=0.0, help="share of each batch drawn from general English/code")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--compile", type=int, default=1, help="continual: compile the training steps (0 = eager)")
+    ap.add_argument("--memory_tokens", type=float, default=0, help="continual --domains: tokens of each specialty read "
+                    "into episodic memory as it arrives (0 = no memory)")
+    ap.add_argument("--memory_prune", type=float, default=0, help="continual, memory: after each stage release episodes "
+                    "the model now predicts with p(next) >= this (0 = keep all)")
+    ap.add_argument("--memory_k", type=int, default=32, help="continual, memory: neighbours recalled")
+    ap.add_argument("--memory_eval_tokens", type=int, default=100_000, help="continual, memory: tokens scored per text")
     a = ap.parse_args()
     a.eval_at = {int(s) for s in a.eval_at.split(",")}
     if a.command == "prepare":
