@@ -19,6 +19,9 @@ jobs=(
   "continual $B --domains $D,instruct,chat $X --multi_depth 1 --placement dissonance --name C2_spec_instruct_chat"
   # C1 again, keeping the grown modules for sample replies (samples.py)
   "continual $B --domains instruct,chat $X --multi_depth 1 --placement dissonance --save runs/forgetting/C1s_instruct_chat --name C1s_instruct_chat"
+  # PLANNED, NOT STARTED (owner, Nov 2): C2 again, keeping the modules, for sample replies that need the specialties
+  # (LOCAL_PLAN.md "Next run: C2s"). Uncomment, tell the owner, then launch the queue.
+  # "continual $B --domains $D,instruct,chat $X --multi_depth 1 --placement dissonance --save runs/forgetting/C2s_spec_instruct_chat --name C2s_spec_instruct_chat"
 )
 mkdir -p runs/forgetting
 for j in "${jobs[@]}"; do

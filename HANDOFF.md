@@ -67,6 +67,10 @@ A, B, C, D, D2, E, the data-worth runs and the specialty-memory test. #3 (sleep 
   (model/episodic.py, `--memory_tokens`); queue in model/cls_queue.sh (tmux `cls`).
 
 ## Next steps, in order
+0. **Next run, planned and NOT started (the owner starts it): C2s_spec_instruct_chat**, C2 again with `--save`,
+   then sample replies on one question per specialty, to see whether specialty knowledge comes through in chat
+   form. Step-by-step resume instructions: model/LOCAL_PLAN.md "Next run: C2s" (the queue line is in
+   model/cls_queue.sh, commented out; samples.py needs a `--prompts FILE` option first). After that: step 3.
 1. Complementary-learning loop (step 2, running locally): each specialty enters episodic memory as it arrives;
    after wake + sleep the memory is re-keyed and releases what the modules now predict (p >= 0.5). Questions: does
    memory add on top of consolidated modules; does release keep the gain; which gate (fixed, entropy, dissonance)

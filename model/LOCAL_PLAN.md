@@ -215,3 +215,41 @@ The rerun matched C1 (instruct 1.0277 vs 1.0270, chat 0.8603 vs 0.8606).
   instruct modules rather than standing alone, as the scores showed.
 - Content is mostly wrong or looping (watermelon "a great source of protein", a Haskell monad explained as an
   automobile; C1 has no specialty modules): a 136M model at 1B tokens learns the form, not the knowledge.
+
+### Next run: C2s_spec_instruct_chat (planned Nov 2, NOT started: the owner starts it)
+**Question:** does the specialty knowledge come through when the model answers in chat form? C1s's replies had
+the assistant form but wrong content, and it has no specialty modules (a Haskell monad came out as an automobile).
+C2's model has the 10 specialty modules plus instruct and chat, but C2 didn't save its modules, so: C2 again with
+`--save`. Same settings as C2, so its scores should match C2 within ~0.005 bpb (a second noise check).
+
+**To resume (all code and data are in place; nothing to build):**
+1. Tell the owner first (GPU-memory notice: they may need to close the openbox desktop). ~2 h on the 4070 (C2:
+   2:34 - 4:36 AM), ~3-4 GB (C1 used 2.8 GB).
+2. In model/cls_queue.sh uncomment the C2s line (the last job). Launch from model/:
+   `tmux new-session -d -s cls bash -c './cls_queue.sh 2>&1 | tee -a runs/forgetting/cls_queue.log'`
+   The queue skips every job whose runs/forgetting/continual_<name>.json exists, so only C2s runs.
+   Progress: runs/forgetting/C2s_spec_instruct_chat.log (one "stage N" line per specialty, then "without ..."
+   audit lines, then "saved the grown parts to runs/forgetting/C2s_spec_instruct_chat"); start/done/FAILED lines
+   in runs/forgetting/cls_queue.log. Check the log for NaN / Traceback.
+3. Compare its final scores with C2 (continual_C2_spec_instruct_chat.json): specialties, instruct 1.0419, chat
+   0.8709, English/code drift.
+4. Sample replies. samples.py needs a small addition first: a `--prompts FILE` option (one prompt per line) to
+   replace its 4 fixed prompts. Planned prompts, one per specialty plus two general:
+   - Haskell: Explain what a monad is in Haskell, in simple terms.
+   - Rust: Write a function in Rust that returns the largest number in a vector.
+   - Lua: How do I loop over a table in Lua and print each key and value?
+   - Fortran: Write a Fortran subroutine that adds two arrays.
+   - medical: What are the common symptoms of type 2 diabetes?
+   - law: What is the difference between a misdemeanor and a felony?
+   - philosophy: What did Kant mean by the categorical imperative?
+   - logic: What is modus ponens? Give an example.
+   - music: How do I play a C major chord on the guitar?
+   - space: Why does Mars look red?
+   - general: What causes the seasons on Earth? / Give me three tips for sleeping better.
+   Run: `../.venv/bin/python samples.py runs/forgetting/C2s_spec_instruct_chat --prompts <file>
+   --variants base,-instruct+chat,-chat,all --n 2` (base = no grown modules; -instruct+chat = the specialty
+   modules only; -chat = specialties + instruct; all = everything). Also run C1s on the same prompt file for
+   chat-without-specialties. -> runs/forgetting/<run>/samples.md (not in git).
+5. Read: on specialty questions, does "all" in C2s get more right than "all" in C1s (same chat skill, no
+   specialty modules) and than "-instruct+chat" (specialty knowledge, no chat form)? Write up here and in
+   HANDOFF.md; commit and push only when the owner asks.
