@@ -1,5 +1,7 @@
 # Handoff: brain-model research (state as of Oct 31, 2026, morning Central)
 
+**Branch wai_struct (this worktree): brain-like structure first. Plan and rules in model/STRUCT_PLAN.md; never merged into main.**
+
 **Which variant is best so far, with the numbers: `model/BEST.md`** (one page; start there).
 
 Read this first, then `model/H200_PLAN.md` (the full results log, every run and decision in order) and
