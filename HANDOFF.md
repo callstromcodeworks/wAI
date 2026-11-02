@@ -84,6 +84,9 @@ A, B, C, D, D2, E, the data-worth runs and the specialty-memory test. #3 (sleep 
    chat's gain), the chat modules only what's specific to conversation; both at depths 4-6, no forgetting. C2 after
    the 10 specialties: the specialties lose nothing (max 0.0004), instruct/chat learn ~15% less than on the bare
    base. C2 also reruns M2's modules: ~0.005 bpb run-to-run noise per specialty. Numbers in LOCAL_PLAN.md.
+   Sample replies (`continual --save`, `model/samples.py`): base never answers; instruct modules alone answer
+   short tasks; assistant style ("Sure! Here's ...", numbered tips) only with both groups; content mostly wrong
+   at this size (form learned, not knowledge).
    Topics overlap (philosophy's held-out text recurs in logic's training text, 18% of windows): expected and
    harmless to the model, so no deduplication; only read memory's philosophy gain after logic arrives (15%) as
    verbatim recall, not generalisation.
@@ -94,7 +97,8 @@ A, B, C, D, D2, E, the data-worth runs and the specialty-memory test. #3 (sleep 
 ## Where things are
 - Code: GitHub callstromcodeworks/wAI (this repo; the Linux version). Older Windows tree: worksAI (agent, phone
   cluster, home server; contains key files that must not be read or copied casually).
-- Key tools: `run.py` (setup, data, test, train --queue, status, eval, export), `model/forgetting.py` (continual
+- Key tools: `run.py` (setup, data, test, train --queue, status, eval, export), `model/samples.py` (sample replies
+  from a run saved with `continual --save`), `model/forgetting.py` (continual
   learning harness: `continual` with --domains, --multi_depth, --placement, --sleep_priority, --replay_source),
   `model/build_domains.py` (the 10-specialty benchmark), `model/memory_lm.py`, `model/register_diag.py`,
   `model/register_probe.py`, `model/tokenization_diag.py`, `model/tests/*_checks.py`, `model/episodic.py`

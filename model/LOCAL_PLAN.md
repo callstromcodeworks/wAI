@@ -197,3 +197,21 @@ M2's settings (multi-depth at the most conflicted depths, sleep), no memory.
   train), so they are a rerun of M2's modules: Haskell 1.0350 vs 1.0299 (0.005), Rust 0.7187 vs 0.7209, Fortran
   1.0012 vs 1.0002, mean kept 0.0314 vs 0.0319. Confirms ~0.005 bpb run-to-run noise per specialty, and that M3's
   differences from M2 (Haskell 0.008, M3 vs C2 0.002) are noise.
+
+**Sample replies (C1s_instruct_chat: C1 rerun with `--save`, 6:58 - 7:07 AM Nov 2)**
+`continual --save DIR` writes the grown modules (safetensors + grown.json); `forgetting.load_grown(DIR)` puts them
+back on the base export (checked: the reloaded model reproduces the run's scores exactly); `samples.py DIR` answers
+held-out first turns and fixed prompts with the base model, each module group switched off, and the full model
+(temperature 0.7, top-k 40) -> DIR/samples.md (runs/forgetting/C1s_instruct_chat/samples.md, not in git).
+The rerun matched C1 (instruct 1.0277 vs 1.0270, chat 0.8603 vs 0.8606).
+- Base model: never answers; continues as web text or repeats the question.
+- Chat modules only (instruct switched off): imitates the transcript, writes "User:"/"Assistant:" turns itself.
+- Instruct modules only: answers short tasks in Dolly's form ("Identify which car manufacturer is British or
+  American: Aston Martin, Cadillac" -> "Aston Martin is British, Aston Martin is American"; pulls the right
+  sentence out of a given passage: "The species can be found in Africa ...").
+- Both: assistant style appears only here ("Certainly! Here's a possible paragraph:", "Sure! Here's a quick
+  step-by-step guide", numbered tips: "Choose a quiet place: Get your bedroom dark and away from any
+  electronics ...", "Practice mindfulness: ... meditation, deep breathing"). The chat modules build on the
+  instruct modules rather than standing alone, as the scores showed.
+- Content is mostly wrong or looping (watermelon "a great source of protein", a Haskell monad explained as an
+  automobile; C1 has no specialty modules): a 136M model at 1B tokens learns the form, not the knowledge.

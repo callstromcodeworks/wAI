@@ -85,6 +85,25 @@ def load_model(path):
     return model, ck
 
 
+def load_grown(path):
+    """(model, meta) from a continual run saved with --save: its base export plus the grown parts, in the order they
+    were added (modules at the same depth apply in turn). Nothing is unpickled."""
+    from safetensors.torch import load_file
+    from brain import ModuleBank
+    meta = json.load(open(os.path.join(path, "grown.json")))
+    base = meta["base"] if os.path.isabs(meta["base"]) else os.path.join(HERE, meta["base"])
+    model, _ = load_model(base)
+    model.grown_at, model.grown_gates = nn.ModuleDict(), nn.ModuleDict()
+    with torch.device("cuda"):
+        for key in meta["keys"]:
+            model.grown_at[key] = ModuleBank(model.cfg, meta["k"][key], attention=True)
+            model.grown_gates[key] = nn.Linear(model.cfg.d_model, meta["k"][key])
+    parts = nn.ModuleDict({"grown_at": model.grown_at, "grown_gates": model.grown_gates})
+    parts.load_state_dict(load_file(os.path.join(path, "grown.safetensors"), device="cuda"))
+    model.eval()
+    return model, meta
+
+
 def rows_from(ids, n_rows, offset=0):
     n_rows = min(n_rows, (len(ids) - 1 - offset) // T)
     return np.stack([ids[offset + r * T: offset + r * T + T + 1] for r in range(n_rows)]).astype(np.int64)
@@ -555,6 +574,8 @@ def continual(a):
         general = [recall(a.recall_seqs)]
     curve = [evaluate("start")]
     mem, mem_curve, distilled = None, [], []
+    if a.save and a.adapter:
+        raise SystemExit("--save saves grown modules, not adapters")
     if a.sleep_distill and not a.memory_tokens:
         raise SystemExit("--sleep_distill needs --memory_tokens")
     if a.memory_tokens:  # the hippocampus: each specialty is read into episodic memory as it arrives (episodic.py)
@@ -699,6 +720,16 @@ def continual(a):
                distilled=distilled)
     os.makedirs(OUT_DIR, exist_ok=True)
     json.dump(res, open(os.path.join(OUT_DIR, f"continual_{a.name}.json"), "w"), indent=1)
+    if a.save:  # the grown parts (safetensors), to load on top of the base export with load_grown (samples.py)
+        from safetensors.torch import save_file
+        os.makedirs(a.save, exist_ok=True)
+        parts = nn.ModuleDict({"grown_at": model.grown_at, "grown_gates": model.grown_gates})
+        save_file({k: v.detach().contiguous() for k, v in parts.state_dict().items()},
+                  os.path.join(a.save, "grown.safetensors"))
+        json.dump(dict(name=a.name, base=a.ckpt, domains=a.domains, layout=layout, keys=list(model.grown_at.keys()),
+                       k={key: g.out_features for key, g in model.grown_gates.items()}),
+                  open(os.path.join(a.save, "grown.json"), "w"), indent=1)
+        print(f"saved the grown parts to {a.save}", flush=True)
 
 
 def summary():
@@ -752,6 +783,7 @@ def main():
     ap.add_argument("--train", default="all")
     ap.add_argument("--docs", default=None, help="prepare: JSONL file of documents ({\"text\": ...} per line)")
     ap.add_argument("--name")
+    ap.add_argument("--save", default="", help="continual: directory for the grown parts at the end (load_grown)")
     ap.add_argument("--steps", type=int, default=300)
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--accum", type=int, default=4, help="micro-batches per step (8 x 1024 x 4 = 32k tokens)")

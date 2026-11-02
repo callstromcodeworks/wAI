@@ -17,6 +17,8 @@ jobs=(
   # C1 on the base model alone; C2 after the 10 specialties (does conversation training wear the specialties away?)
   "continual $B --domains instruct,chat $X --multi_depth 1 --placement dissonance --name C1_instruct_chat"
   "continual $B --domains $D,instruct,chat $X --multi_depth 1 --placement dissonance --name C2_spec_instruct_chat"
+  # C1 again, keeping the grown modules for sample replies (samples.py)
+  "continual $B --domains instruct,chat $X --multi_depth 1 --placement dissonance --save runs/forgetting/C1s_instruct_chat --name C1s_instruct_chat"
 )
 mkdir -p runs/forgetting
 for j in "${jobs[@]}"; do
