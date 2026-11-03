@@ -775,6 +775,16 @@ def continual(a):
         eot = tok.eot
     if a.old_refresh and not (a.old_pool and a.stream and not a.old_from_days):
         raise SystemExit("--old_refresh needs --stream and --old_pool, without --old_from_days")
+    # study until learned (--master_tol, STRUCT_PLAN 4a): a share of each night's buffer is held back as its exam.
+    # The buffer stays in study (wake and sleep) on the nights that follow, and is released after a night that
+    # improved its exam by less than --master_tol bits per byte. --study_nights K, the control: exactly K nights each
+    exam_mode = bool(a.master_tol or a.study_nights)
+    study = []  # per buffer: day, specialty (for reports only), study rows, exam rows, exam bpb after each night
+    if exam_mode and (not a.stream or a.rebuild_cue or (a.master_tol and a.study_nights)):
+        raise SystemExit("--master_tol / --study_nights need --stream, no --rebuild_cue, and only one of the two")
+
+    def studying():
+        return [r for s in study if s["released"] is None for r in s["rows"]]
 
     def experience(rows):
         nonlocal old_read
@@ -798,6 +808,13 @@ def continual(a):
                 curve.append(evaluate(f"day {st + 1} (quiet)"))
                 continue
             buffers.append(buf)
+            if exam_mode:  # hold back the exam; the pre-test is the exam before anything is learned from it
+                perm = rng.permutation(len(buf))
+                n_exam = max(8, int(round(len(buf) * a.exam_share)))
+                exam = np.stack([buf[i] for i in perm[:n_exam]]).astype(np.int64)
+                buf = buffers[-1] = [buf[i] for i in perm[n_exam:]]
+                study.append(dict(day=st + 1, name=names[st], rows=buf, exam=exam,
+                                  u=[score(model, exam, token_bytes)], nights=0, released=None))
         rebuilt = None
         if a.old_refresh:  # control for --old_generate: as many old windows, fresh from the corpus every night
             old_pool[:] = [window(general[0] if rng.random() < 0.6 else general[1]) for _ in range(a.old_pool)]
@@ -862,7 +879,7 @@ def continual(a):
             layout.append(keys)
         lr = a.lr_adam if a.grow else a.lr_full
         if buf is not None:  # night, first part: learn from today's buffer (with the usual replay of general text)
-            pools["new"] = buf
+            pools["new"] = studying() if exam_mode else buf  # ... or from every buffer still in study
         if old_pool:
             pools["old"] = old_pool
         train(params, a.stage_steps, [new], 1.0 - a.replay, lr)
@@ -875,7 +892,7 @@ def continual(a):
             if a.sleep_distill:  # ... carrying memory's predictions, to be distilled into this stage's modules
                 distilled.append(prepare_distill(st))
             if buf is not None:  # sleep replays every night's buffer so far (as C2's sleep replays seen specialties)
-                pools["new"] = [r for b in buffers for r in b]
+                pools["new"] = studying() if exam_mode else [r for b in buffers for r in b]
                 if a.rebuild_cue:  # ... earlier nights as rebuilt from their cues, in the same proportion
                     n_prev = sum(len(b) for b in buffers[:-1])
                     pools["new"] = list(buf) + ([rebuilt[i % len(rebuilt)] for i in range(n_prev)] if rebuilt else [])
@@ -888,6 +905,18 @@ def continual(a):
         if a.grow:
             for p in params:
                 p.requires_grad_(False)  # matured: this stage's modules stop changing
+        if exam_mode:  # the night's exams: release what tonight's study no longer improved
+            report = []
+            for s in study:
+                if s["released"] is None:
+                    s["u"].append(score(model, s["exam"], token_bytes))
+                    s["nights"] += 1
+                    gain = s["u"][-2] - s["u"][-1]
+                    if s["nights"] >= a.study_nights if a.study_nights else gain < a.master_tol:
+                        s["released"] = st + 1
+                    report.append(f"day {s['day']} ({s['name'][:7]}) {s['u'][0]:.4f}->{s['u'][-1]:.4f}, "
+                                  f"tonight {gain:+.4f}" + (" released" if s["released"] else ""))
+            print(f"  exams: " + " | ".join(report) + f"; still in study: {len(studying())} windows", flush=True)
         curve.append(evaluate(f"stage {st + 1} ({','.join(keys)})"))
         if mem is not None:  # the model changed: re-key the memory (and release what it has now learned)
             held = mem.reencode(prune=a.memory_prune or None)
@@ -914,7 +943,10 @@ def continual(a):
                surprise_k=a.surprise_k,
                stream_share=a.stream_share, buffer_max=a.buffer_max, stream_oracle=a.stream_oracle,
                stream_stats=stream_stats, old_pool=a.old_pool, old_from_days=a.old_from_days, old_read=old_read,
-               old_refresh=a.old_refresh, old_generate=a.old_generate, rebuild_cue=a.rebuild_cue, rebuild_n=a.rebuild_n, gen_stats=gen_stats)
+               old_refresh=a.old_refresh, old_generate=a.old_generate, rebuild_cue=a.rebuild_cue, rebuild_n=a.rebuild_n, gen_stats=gen_stats,
+               master_tol=a.master_tol, exam_share=a.exam_share, study_nights=a.study_nights,
+               study=[dict(day=s["day"], name=s["name"], rows=len(s["rows"]), exam_rows=len(s["exam"]), u=s["u"],
+                           nights=s["nights"], released=s["released"]) for s in study])
     os.makedirs(OUT_DIR, exist_ok=True)
     json.dump(res, open(os.path.join(OUT_DIR, f"continual_{a.name}.json"), "w"), indent=1)
     if a.save:  # the grown parts (safetensors), to load on top of the base export with load_grown (samples.py)
@@ -999,6 +1031,12 @@ def main():
     ap.add_argument("--rebuild_cue", type=int, default=0, help="stream: earlier nights' buffers are kept only as their "
                     "first N tokens; sleep replays windows the model rebuilds from them")
     ap.add_argument("--rebuild_n", type=int, default=1024, help="stream, rebuild: windows rebuilt per night")
+    ap.add_argument("--master_tol", type=float, default=0.0, help="stream: study until learned (STRUCT_PLAN 4a); a "
+                    "buffer stays in study each night until a night improves its held-back exam by less than this (bpb)")
+    ap.add_argument("--exam_share", type=float, default=0.1, help="stream, master_tol/study_nights: share of each "
+                    "buffer held back as its exam (never studied)")
+    ap.add_argument("--study_nights", type=int, default=0, help="stream control for --master_tol: each buffer is "
+                    "studied exactly this many nights (the exam is measured, not used)")
     ap.add_argument("--gen_batch", type=int, default=32, help="stream: sequences written at once (old_generate/rebuild)")
     ap.add_argument("--old_pool", type=int, default=0, help="continual: replay old material from this many windows "
                     "kept from before (0 = the whole general corpus)")

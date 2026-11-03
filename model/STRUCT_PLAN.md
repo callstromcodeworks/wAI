@@ -39,8 +39,20 @@ The brain-like learning life cycle, built on the organization that already works
      patterns come back accurately, rarely used ones loosely. A second run also rebuilds the earlier days'
      specialty text from short cues kept from their buffers, instead of whole windows (the hippocampus keeps an
      index, the cortex fills it in). Needs incremental decoding for the grown model (BrainGPT had none).
+   - **Dropped for now (owner, Nov 3), after 3b's control.** The owner: humanity learned from generations of
+     shared knowledge, not each individual's own; replaying the shared record (the corpus) is part of learning.
+     S3b_gen2k was stopped at day 3; S3b_gen2k_cue32 was not run.
 4. **Surprise-gated plasticity (neuromodulation).** Each token's training is weighted by how unexpected it was to
    the model.
+   - **4a, first version (owner, Nov 3: "start A as 4's first version"): study until learned.** From the owner:
+     students learn over several sessions until their uncertainty falls below a threshold, and only then are said
+     to have learned the material. 10% of each night's buffer is held back as its exam. The buffer stays in study
+     (wake and sleep) on the nights that follow, and is released after a night that improved its exam by less than
+     0.002 bpb. Old general text is replayed as before. Run S4a_learned; then a control that studies every buffer
+     for the same fixed number of nights (`--study_nights`, set from S4a's average), so the test is what decides.
+   - The original form (each token's training weighted by its surprise) stays for a later version.
+   - **B, planned after 4a (owner: "plan for B afterwards"):** use makes recall easier because the brain gets better
+     at what it uses. Plan below, under "4b plan".
 5. **Pruning and recycling.** Remove grown modules that are rarely used and reuse their capacity. Its priority
    depends on R1 (main: reverse order, does learning slow as knowledge accumulates?).
 6. **Capstone.** Tell it facts during the day; after a night's sleep, does it know them without the facts in
@@ -239,6 +251,53 @@ window ~4.4 times in one night and never again).
   model's text were as good as real. The question they answer is unchanged (written against read text at an
   equal count), but matching S1 would need ~16k written windows a night, ~0.5–2 h of decoding per night at
   today's speed.
+- 3b's generated runs were then dropped for now (owner, Nov 3; see the work queue).
+
+### 4a. Study until learned: setup (Nov 3)
+- **forgetting.py `--master_tol X`** (stream mode):
+  - Each night's buffer is split 90/10. The 10% is the exam, never studied, and is scored (bpb) before anything
+    is learned from it.
+  - Every buffer still in study is pooled for the night's wake and sleep, in place of S1's "today's buffer by
+    day, every buffer so far in sleep".
+  - After each night every buffer in study is examined again, and released if tonight improved it by less than
+    X. Released buffers are no longer replayed.
+- **`--study_nights K`** is the control: each buffer is studied exactly K nights, whatever its exam says.
+- **Threshold:** 0.002 bpb is about 2% of Haskell's own-stage gain and about the size of the smallest
+  specialties' whole gain (law, logic), so those are released after their first night.
+- Smoke test (3 specialties, 20 + 10 steps): exams, pooling and release behave as intended. The log line is
+  `exams: day 1 (haskell) 1.1892->1.1737, tonight +0.0038 | ...`.
+- S4a_learned started at 3:12 PM (struct_queue.sh, tmux s5), ~2 h.
+
+### 4b plan: recurring topics and practice (owner: "plan for B afterwards"; not built)
+The owner's account: what gets used a lot becomes easier to recall, because the brain itself gets better at it.
+The current benchmark can't test that: each specialty arrives on one day, so nothing is used more than anything
+else.
+1. **Benchmark: a stream with uneven recurrence.**
+   - 30 days. The 10 specialties recur on a fixed uneven schedule, from about 8 appearances for the most frequent
+     down to 1 for the rarest; which specialty gets which frequency is fixed by seed and reported.
+   - Each appearance reads a random third of the specialty's training text (~1,000 windows) with as much
+     familiar text, so a repeat brings partly new and partly seen material.
+   - Scored as now, plus a recall curve: each specialty's gain against its number of appearances, and how much a
+     rare specialty kept by day 30.
+   - ~6 h per run at today's speed, more as parts accumulate.
+2. **Baseline:** the current recipe on that stream (S1, or 4a if it wins). It grows 3 new parts every day, about 90
+   by day 30, and the parts that learned a specialty freeze after their night, so practice can only add parts.
+3. **Practice strengthens what holds the skill.** On a day whose buffer resembles an earlier day's (state
+   neighbors across buffers, as the today@6 detector does within a day), no new parts are grown. Instead the parts
+   grown on the matching earlier days are unfrozen and learn again. New parts grow only for material nothing
+   matches.
+   - Brain-like in structure: practice changes existing circuits, and new tissue serves new skills.
+   - Measures: the recall curve against the baseline at equal steps, and parts count.
+4. **Recall drives consolidation (the hippocampus).** Episodic memory joins the stream (today `--stream` refuses
+   `--memory_tokens`). Episodes recalled while reading a day count as used. Sleep replays the windows behind
+   the most-used episodes, and episodes the cortex now predicts unaided (p(next) ≥ 0.5) are released, as M2's
+   prune did.
+   - Measures: memory size over time, and gain from memory against gain in the weights, by frequency of use.
+5. **Order:** benchmark and baseline first (one run), then 3, then 4.
+6. **Open, to settle before building:**
+   - the frequency schedule, which could also follow 4a's result;
+   - whether repeats re-read the same text (rereading a book) or only fresh parts (using a skill on new
+     problems).
 
 ## Brain-like structure roadmap (moved from main's LOCAL_PLAN.md, Nov 2)
 The owner wants to "push the metaphor to the extreme". Clarified: brain-like in *structure*, not mimicking biology

@@ -33,8 +33,12 @@ jobs=(
   # 3b. replay by reconstruction: old material is 2,048 windows the model writes itself each night; the control
   # redraws as many corpus windows each night; then earlier nights' buffers kept only as 32-token cues and rebuilt
   "forgetting/S3b_fresh2k|$S --old_pool 2048 --old_refresh 1 --name S3b_fresh2k"
-  "forgetting/S3b_gen2k|$S --old_generate 2048 --name S3b_gen2k"
-  "forgetting/S3b_gen2k_cue32|$S --old_generate 2048 --rebuild_cue 32 --name S3b_gen2k_cue32"
+  # (dropped for now by the owner, Nov 3, after the control: S3b_gen2k stopped at day 3, S3b_gen2k_cue32 not run)
+  # "forgetting/S3b_gen2k|$S --old_generate 2048 --name S3b_gen2k"
+  # "forgetting/S3b_gen2k_cue32|$S --old_generate 2048 --rebuild_cue 32 --name S3b_gen2k_cue32"
+  # 4a. study until learned (item 4's first version): 10% of each buffer held back as its exam; buffers stay in
+  # study (wake and sleep) until a night improves their exam by less than 0.002 bpb, then are released
+  "forgetting/S4a_learned|$S --master_tol 0.002 --name S4a_learned"
 )
 mkdir -p runs/forgetting runs/selective
 for j in "${jobs[@]}"; do
