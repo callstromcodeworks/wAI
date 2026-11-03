@@ -14,13 +14,16 @@ policy stores the same number of episodes per day (--cap, M2 stored 500k tokens 
   for the same number of episodes);
 - labeled, labeled p<P: the specialty's own windows (a perfect detector), all tokens / surprising tokens only;
 - buffer_rR, labeled_rR: a random share R of the tokens, the control for p<P (as much text covered, without choosing
-  by surprise; R=0.6 matches p<0.5's share).
+  by surprise; R=0.6 matches p<0.5's share);
+- buffer_mMpP: tokens with M <= p(next) < P, a band of interest: surprising, but not so surprising it looks like
+  noise (people are most curious about what they half know).
 Each memory is keyed by the model and scored like M2 (episodic.py score: blend chosen on the first half of each
 held-out text, reported on the second): gain in bpb over the model alone, per specialty and on familiar English
 and code. Philosophy is left out of means (18% of its held-out text recurs verbatim in logic's training text)."""
 import argparse
 import math
 import os
+import re
 import sys
 
 import numpy as np
@@ -107,26 +110,27 @@ def main():
     results = {}
     for pol in a.policies.split(","):
         src, _, v = pol.partition("_")
-        p, r = (float(v[1:]) if v[:1] == c else None for c in "pr")
+        opt = {c: float(x) for c, x in re.findall(r"([pmr])([0-9.]+)", v)}
+        p, r, m = (opt.get(c) for c in "prm")
         mem = EpisodicMemory(model, token_bytes, k=a.memory_k)
         stored = read = 0
         for n in names:
             rows = days[n]["rows" if src == "all" else src]
             rows = rows[rng.permutation(len(rows))]
-            s, rd = mem.store(n, rows, max_p=p, cap=a.cap, rate=r)
+            s, rd = mem.store(n, rows, max_p=p, cap=a.cap, rate=r, min_p=m)
             stored, read = stored + s, read + rd
         res = {t: mem.score(ids, a.eval_tokens) for t, ids in texts.items()}
         gain = {t: (r["model"] - r["memory"]) / r["model"] for t, r in res.items()}
         mean = np.mean([gain[n] for n in names if n != "philosophy"])
         results[pol] = dict(gain=gain, stored=stored, read=read, mean=mean)
-        print(f"{pol:13} stored {stored / 1e6:.2f}M episodes (read {read / 1e6:.2f}M tokens) | mean gain {mean:.2%} "
+        print(f"{pol:16} stored {stored / 1e6:.2f}M episodes (read {read / 1e6:.2f}M tokens) | mean gain {mean:.2%} "
               f"({mean / (stored / 1e6):.3%} per M episodes) | " +
               " | ".join(f"{t[:7]} {g:+.2%}" for t, g in gain.items()), flush=True)
         del mem
         torch.cuda.empty_cache()
     print("\nsummary (mean over the specialties, philosophy excluded):")
     for pol, r in results.items():
-        print(f"  {pol:13} {r['mean']:.2%} with {r['stored'] / 1e6:.2f}M episodes = {r['mean'] / (r['stored'] / 1e6):.3%} "
+        print(f"  {pol:16} {r['mean']:.2%} with {r['stored'] / 1e6:.2f}M episodes = {r['mean'] / (r['stored'] / 1e6):.3%} "
               f"per M; English {r['gain']['english']:+.2%}, code {r['gain']['code']:+.2%}")
 
 

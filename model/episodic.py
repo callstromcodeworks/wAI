@@ -115,11 +115,12 @@ class EpisodicMemory:
         self.keyed_by = fp
 
     @torch.no_grad()
-    def store(self, tag, rows, max_p=None, cap=None, chunk_rows=128, rate=None):
+    def store(self, tag, rows, max_p=None, cap=None, chunk_rows=128, rate=None, min_p=None):
         """Selective arrival (wai_struct): read windows rows [r, T + 1] in order and store only the episodes the model
         predicts with p(next) < max_p (every one with max_p None), until cap are stored; rows after the last stored
         episode are dropped. rate=R instead stores a random share R of the episodes (the control for max_p: as much
-        text covered, without choosing by surprise). keep (and so consolidation) then runs over the stored episodes only. Returns how many
+        text covered, without choosing by surprise). min_p: also skip episodes predicted with p(next) < min_p (too
+        surprising to be interesting). keep (and so consolidation) then runs over the stored episodes only. Returns how many
         episodes were stored and how many tokens were read to find them."""
         hs, ys, sels, n = [], [], [], 0
         for c in range(0, len(rows), chunk_rows):
@@ -128,6 +129,8 @@ class EpisodicMemory:
             h, y, lp = encode(self.model, rows[c:c + chunk_rows].astype(np.int64))
             sel = (torch.rand(y.shape, device=y.device) < rate if rate is not None else
                    torch.ones_like(y, dtype=torch.bool) if max_p is None else lp < math.log(max_p))
+            if min_p is not None:
+                sel &= lp >= math.log(min_p)
             if cap is not None and n + int(sel.sum()) > cap:
                 sel[int(torch.nonzero(sel)[cap - n - 1]) + 1:] = False
             hs.append(h[sel])

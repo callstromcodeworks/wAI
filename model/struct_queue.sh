@@ -39,6 +39,11 @@ jobs=(
   # 4a. study until learned (item 4's first version): 10% of each buffer held back as its exam; buffers stay in
   # study (wake and sleep) until a night improves their exam by less than 0.002 bpb, then are released
   "forgetting/S4a_learned|$S --master_tol 0.002 --name S4a_learned"
+  # 2c. interest: is "too surprising" (p < 1%, noise-like) worth storing? today's p < 0.5 again, the band
+  # 1% <= p < 50%, and a stricter p < 0.1
+  "selective/P2d_C2s|selective_memory.py --policies buffer_p0.5,buffer_m0.01p0.5,buffer_p0.1"
+  # 4a control: every buffer studied exactly 2 nights (S4a's mean was 2.4), exam measured but not used
+  "forgetting/S4a_nights2|$S --study_nights 2 --name S4a_nights2"
 )
 mkdir -p runs/forgetting runs/selective
 for j in "${jobs[@]}"; do

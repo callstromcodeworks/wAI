@@ -266,7 +266,47 @@ window ~4.4 times in one night and never again).
   specialties' whole gain (law, logic), so those are released after their first night.
 - Smoke test (3 specialties, 20 + 10 steps): exams, pooling and release behave as intended. The log line is
   `exams: day 1 (haskell) 1.1892->1.1737, tonight +0.0038 | ...`.
-- S4a_learned started at 3:12 PM (struct_queue.sh, tmux s5), ~2 h.
+- S4a_learned ran 3:12–5:10 PM (struct_queue.sh, tmux s5).
+
+**Result (S4a_learned against S1_stream; gain in bpb at stage 10):**
+
+| specialty | nights in study | S1 | S4a |
+|---|---|---|---|
+| haskell | 4 | 0.1191 | 0.1022 |
+| medical | 2 | 0.0097 | 0.0028 |
+| lua | 5 | 0.0601 | 0.0553 |
+| philosophy | 1 | 0.0047 | 0.0013 |
+| law | 1 | 0.0015 | 0.0007 |
+| fortran | 5 | 0.0652 | **0.0880** |
+| logic | 2 | 0.0062 | 0.0022 |
+| music | 1 | 0.0038 | 0.0014 |
+| rust | 2, still in study at the end | 0.0427 | **0.0572** |
+| space | 1 | 0.0064 | 0.0019 |
+| **mean** | 2.4 | **0.0319** | **0.0313** |
+| English / code drift | | -0.0002 / +0.0010 | +0.0002 / +0.0015 |
+
+- **Equal on average** (0.0313 against 0.0319; noise ~0.0027), and English and code drift no more.
+- **Study moved to what kept improving.** The code specialties stayed in study 2–5 nights: Fortran and Rust both
+  end ~35% above S1. The prose specialties were released after 1–2 nights and keep about a third of S1's (small)
+  gains: 0.0018 against 0.0055 mean (medical, law, logic, music, space).
+- **Why prose lost:** less study on its first night, not forgetting (each prose total is close to its own-stage
+  gain). The buffers in study share the night equally, so a new day's buffer gets a third to a half of the wake,
+  while S1 gives it all of it (medical's own-stage gain 0.0036 against 0.0099).
+- **Released material slips without review:** Haskell's held-out score worsened 0.016 bpb between its release
+  (night 4) and night 10, and Lua's 0.004 between nights 7 and 10.
+- In terms of interest: the rule behaves like interest as learning progress (Oudeyer and Kaplan), with effort
+  following progress. The control decides whether the exam's choice matters or just studying several nights:
+  S4a_nights2, every buffer exactly 2 nights (S4a's mean 2.4), queued after P2d.
+
+### 2c. Interest: is "too surprising" worth storing? (setup, Nov 3)
+The owner: interest is critical to human learning, and surprise usually draws interest. But curiosity peaks at
+intermediate confidence (Kang et al. 2009) and infants look away from the too simple and the too random (Kidd et al.
+2012). Item 2's rule (p < 0.5) has no upper limit on surprise: it keeps noise-like tokens such as IDs and numbers.
+- episodic.py `store(min_p=M)` and the policy `buffer_mMpP` keep tokens with M <= p(next) < P.
+- P2d (queued 5:12 PM, ~80 min): `buffer_p0.5` again, the band `buffer_m0.01p0.5`, and a stricter `buffer_p0.1`.
+  Same capacity per day (500k episodes), so the band reads more text to fill it.
+- Prediction either way: an inverted U favors the band, but kNN memory helps most on rare tokens (names, library
+  identifiers), which may be exactly the p < 1% ones.
 
 ### 4b plan: recurring topics and practice (owner: "plan for B afterwards"; not built)
 The owner's account: what gets used a lot becomes easier to recall, because the brain itself gets better at it.
