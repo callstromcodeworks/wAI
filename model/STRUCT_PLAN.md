@@ -272,32 +272,42 @@ window ~4.4 times in one night and never again).
 The owner's account: what gets used a lot becomes easier to recall, because the brain itself gets better at it.
 The current benchmark can't test that: each specialty arrives on one day, so nothing is used more than anything
 else.
-1. **Benchmark: a stream with uneven recurrence.**
-   - 30 days. The 10 specialties recur on a fixed uneven schedule, from about 8 appearances for the most frequent
-     down to 1 for the rarest; which specialty gets which frequency is fixed by seed and reported.
-   - Each appearance reads a random third of the specialty's training text (~1,000 windows) with as much
-     familiar text, so a repeat brings partly new and partly seen material.
-   - Scored as now, plus a recall curve: each specialty's gain against its number of appearances, and how much a
-     rare specialty kept by day 30.
-   - ~6 h per run at today's speed, more as parts accumulate.
-2. **Baseline:** the current recipe on that stream (S1, or 4a if it wins). It grows 3 new parts every day, about 90
-   by day 30, and the parts that learned a specialty freeze after their night, so practice can only add parts.
-3. **Practice strengthens what holds the skill.** On a day whose buffer resembles an earlier day's (state
-   neighbors across buffers, as the today@6 detector does within a day), no new parts are grown. Instead the parts
-   grown on the matching earlier days are unfrozen and learn again. New parts grow only for material nothing
-   matches.
-   - Brain-like in structure: practice changes existing circuits, and new tissue serves new skills.
-   - Measures: the recall curve against the baseline at equal steps, and parts count.
-4. **Recall drives consolidation (the hippocampus).** Episodic memory joins the stream (today `--stream` refuses
-   `--memory_tokens`). Episodes recalled while reading a day count as used. Sleep replays the windows behind
-   the most-used episodes, and episodes the cortex now predicts unaided (p(next) ≥ 0.5) are released, as M2's
-   prune did.
-   - Measures: memory size over time, and gain from memory against gain in the weights, by frequency of use.
-5. **Order:** benchmark and baseline first (one run), then 3, then 4.
-6. **Open, to settle before building:**
-   - the frequency schedule, which could also follow 4a's result;
-   - whether repeats re-read the same text (rereading a book) or only fresh parts (using a skill on new
-     problems).
+Owner's answers (Nov 3):
+- **Schedule:** "Repeat once, 4 times, and then the full 8", meaning three runs (confirmed: not one run with three
+  tiers).
+- **What a repeat is:** "less mixing things and more applying the new knowledge to what was already there". A repeat
+  isn't old and new text mixed together: new material on a known topic is worked into the knowledge that already
+  holds it.
+
+1. **Benchmark: three runs with rising repeats.** Every specialty appears 2, then 4, then 8 times. Each run splits
+   the specialty's whole training text into that many disjoint parts, so every appearance is new text on a known
+   topic and the run as a whole reads the same text as S1.
+   - Days are 20, 40 and 80. Appearances go in rounds, in the usual specialty order (round k brings part k of each
+     specialty), so a topic returns every 10 days. The order is my default, not the owner's.
+   - Night steps scale with the part (400/n wake, 200/n sleep), so every run studies each window as much as S1
+     does. Only the number of sessions changes.
+   - Scored as now: each specialty's gain at the end against S1 (the same text in one session) and across 2/4/8,
+     plus English/code drift and parts count.
+2. **Applying new knowledge to what was there (the mechanism).** On a day whose buffer matches a topic already
+   held, no new parts grow. The parts that hold that topic are unfrozen and learn the new text.
+   - Matching is label-free: state neighbors between today's buffer and earlier days' buffers, as the today@6
+     detector does within a day. A labeled match (oracle) is the control.
+   - New parts grow only for material nothing matches, normally a topic's first appearance.
+   - The update must keep what the parts already did for the topic. Where that topic's earlier material is
+     still in study (4a), it is replayed with the new text. Otherwise the parts' earlier outputs are matched
+     (distillation against the parts as they were). To settle when building.
+   - Brain-like in structure: practice revises existing circuits, and new tissue serves new skills.
+3. **Baseline:** the current recipe on the same streams, growing 3 frozen parts every day. At 8 repeats that is 240
+   parts, likely too slow and too big for the card; then the baseline runs only for 2 and 4 repeats.
+4. **Recall drives consolidation (the hippocampus), after 1–3.** Episodic memory joins the stream (today
+   `--stream` refuses `--memory_tokens`). Episodes recalled while reading a day count as used. Sleep replays the
+   windows behind the most-used episodes, and episodes the cortex now predicts unaided (p(next) ≥ 0.5) are
+   released, as M2's prune did.
+5. **Order:** the 2-repeat stream with the baseline and with the mechanism, then 4, then 8.
+6. **Cost:** total training steps equal S1's; per-day overhead (reading, calibration, placement, scoring every
+   specialty) repeats 20/40/80 times. To be timed on the 2-repeat run before estimating the others.
+7. **With 4a:** a night of 1/n the steps improves an exam less, so 4a's 0.002 bpb release threshold would need
+   scaling by n if 4a is kept.
 
 ## Brain-like structure roadmap (moved from main's LOCAL_PLAN.md, Nov 2)
 The owner wants to "push the metaphor to the extreme". Clarified: brain-like in *structure*, not mimicking biology
