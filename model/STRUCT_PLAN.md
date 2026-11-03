@@ -26,6 +26,19 @@ The brain-like learning life cycle, built on the organization that already works
    and its benefit is measured per stored token.
 3. **Experience as the only data.** Sleep replays a small fixed pool of old text kept from before, instead of an
    unlimited corpus. Sweep the pool size: tiny pools were catastrophic before.
+   - Added Nov 3 (owner: "Both and before item 4"), from the owner's account of human memory: recall isn't
+     verbatim; the brain stores patterns and reconstructs them, a pattern used more is recalled closer to its
+     source, and mnemonics help by tying new material to what is strongly held (like quantization: precision traded
+     for memorability).
+   - **2b. Pattern hippocampus.** Memory keeps patterns, not copies: each episode's key becomes pointers into
+     learned codebooks of prototypes plus a small correction (product/residual quantization). Precision follows use:
+     refined while it is retrieved, coarsened and then released when it isn't. Scored by gain per byte against item
+     2's exact 16-bit keys (1.5 KB per episode).
+   - **3b. Replay by reconstruction.** No stored old text: at the start of each night the model generates old
+     material from its own weights (sampled from a document start), and the night replays that. Well-learned
+     patterns come back accurately, rarely used ones loosely. A second run also rebuilds the earlier days'
+     specialty text from short cues kept from their buffers, instead of whole windows (the hippocampus keeps an
+     index, the cortex fills it in). Needs incremental decoding for the grown model (BrainGPT had none).
 4. **Surprise-gated plasticity (neuromodulation).** Each token's training is weighted by how unexpected it was to
    the model.
 5. **Pruning and recycling.** Remove grown modules that are rarely used and reuse their capacity. Its priority
@@ -124,7 +137,57 @@ Then the structural changes below, best value first.
   only the comparison inside this probe is like for like.
 - **Open control:** the p < 0.5 policies also cover more text. A random 60% of tokens covers as much without
   choosing by surprise (`buffer_r0.6`, `labeled_r0.6`), and a second `buffer_p0.5` with a different reading order
-  gives the probe's noise. Queued after the old-pool sweep (tmux s4, runs/selective/P2c_C2s.log, ~1 h).
+  gives the probe's noise. Runs first in the Nov 3 queue (struct_queue.sh, tmux s5, runs/selective/P2c_C2s.log).
+
+### 3. Experience as the only data (Nov 2–3)
+**Sweep** (struct_queue.sh, 10:34 PM – 8:26 AM, no errors). S1, but old material in the wake's 25% replay and in
+sleep comes from a fixed pool of N windows kept from before (familiar text, English/code 60/40), instead of fresh
+windows from the whole corpus. A night draws ~9,000 old windows, so over the run each pool window is replayed about
+90,000 / N times.
+
+| old material from | replays per window | mean total kept | English | code |
+|---|---|---|---|---|
+| the whole corpus (S1) | — | 0.0319 | -0.0002 | +0.0010 |
+| 16,384 windows | ~5 | **0.0314** | **+0.0006** | **+0.0015** |
+| 4,096, refreshed with each day's familiar windows (reservoir) | ~22 | 0.0262 | +0.0058 | +0.0062 |
+| 4,096 | ~22 | 0.0258 | +0.0085 | +0.0090 |
+| 1,024 | ~90 | -0.0264 | +0.1119 | +0.1185 |
+| 256 | ~350 | -0.0233 | +0.0911 | +0.1244 |
+
+- **16k windows (~17M tokens) is enough:** within noise of S1 on every specialty and on English/code.
+- **4k drifts steadily** (English ~+0.0009 a night). The prose specialties, closest to general English, end below
+  their start (law -0.0068, music -0.0048). The code specialties learn as much as in S1 or more (Fortran 0.073,
+  Rust 0.047), perhaps because the narrower replay constrains the new modules less.
+- **Refreshing the pool with what the day read** cuts the forgetting by about a third, but no more learning is
+  kept.
+- **1k and 256 collapse:** English and code ~0.1 worse, every prose specialty below its start. The own-stage gains
+  look large (Lua 0.49 with 256) only because each stage repairs damage done before it.
+- **Reading:** what matters is how often each kept window is replayed, not the pool itself. Below ~5 replays per
+  window over the run it holds, by ~20 it drifts, and by ~90 the model memorizes the pool and loses general text.
+- **Limits of the analogy** (discussed with the owner, Nov 3): the pool keeps raw text verbatim, which the brain
+  doesn't, and four of the five pools are corpus text chosen at the start rather than anything the model read. Item
+  3b replaces the stored text with text the model writes itself.
+- **Earlier H200 results this explains:** main's replay of the model's own samples ("recall", Oct 30, closed as
+  harmful in BEST.md) drew 512 sequences once, before learning, and replayed them for all 10 stages: a fixed pool of
+  512, which this sweep shows is catastrophic even for real text. So that verdict may be about pool size, not about
+  the samples; 3b retests it with fresh samples every night.
+
+### 2b and 3b: setup (Nov 3)
+- **Decoding for the grown model** (brain.py BrainCache, reconstruct.py Decoder): BrainGPT had no incremental
+  decoding. A fixed-shape step (position as a GPU tensor, masked attention over the whole buffer) is captured as a
+  CUDA graph.
+  - Check against a full forward (C2s, 36 grown parts, 4 × 1,024 tokens each of English, code, Haskell): loss
+    3.2324 / 1.9778 / 2.6179 forward vs 3.2314 / 1.9783 / 2.6180 decoding, top-1 agreement 99.0–99.3% (bf16
+    rounding).
+  - Speed with 36 parts: 1,811 tokens/s at batch 32 (eager decoding was 414, bound by ~2,000 small kernels per
+    token). It is now memory-bound: every grown part keeps its own K/V. A stream run has 0–27 parts at night, so
+    2,048 windows take about 4–15 minutes a night.
+- **Pattern memory check** (Rust alone, 500k episodes): exact keys 2.53%, fine codes (96 B, 1/16 of the bytes)
+  2.02%, coarse (32 B) 0.64%, precision by use (48 B average, 32 use windows) 0.78%; releasing never-recalled
+  episodes (51%) lost it all (-0.07%). The full probe uses 64 use windows per specialty.
+- **Queue** (struct_queue.sh, tmux s5, from 9:02 AM): P2c (item 2 control) → P2b (pattern memory) → S3b_fresh2k
+  (control: 2,048 fresh corpus windows every night) → S3b_gen2k (2,048 windows the model writes every night) →
+  S3b_gen2k_cue32 (also earlier nights' buffers kept as 32-token cues and rebuilt, 1,024 a night).
 
 ## Brain-like structure roadmap (moved from main's LOCAL_PLAN.md, Nov 2)
 The owner wants to "push the metaphor to the extreme". Clarified: brain-like in *structure*, not mimicking biology

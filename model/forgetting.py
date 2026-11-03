@@ -767,6 +767,14 @@ def continual(a):
     # window read so far equally likely to be among them)
     old_pool = [window(general[0] if rng.random() < 0.6 else general[1]) for _ in range(a.old_pool)]
     old_read = len(old_pool)
+    gen_stats = []  # replay by reconstruction: what was written each night, and how long it took
+    if a.old_generate or a.rebuild_cue:
+        if not a.stream or a.old_pool or a.old_from_days:
+            raise SystemExit("--old_generate / --rebuild_cue need --stream and no --old_pool / --old_from_days")
+        tok = Tokenizer(VOCABS[vocab])
+        eot = tok.eot
+    if a.old_refresh and not (a.old_pool and a.stream and not a.old_from_days):
+        raise SystemExit("--old_refresh needs --stream and --old_pool, without --old_from_days")
 
     def experience(rows):
         nonlocal old_read
@@ -790,6 +798,28 @@ def continual(a):
                 curve.append(evaluate(f"day {st + 1} (quiet)"))
                 continue
             buffers.append(buf)
+        rebuilt = None
+        if a.old_refresh:  # control for --old_generate: as many old windows, fresh from the corpus every night
+            old_pool[:] = [window(general[0] if rng.random() < 0.6 else general[1]) for _ in range(a.old_pool)]
+        if a.old_generate or (a.rebuild_cue and len(buffers) > 1):  # replay by reconstruction (STRUCT_PLAN 3b)
+            from reconstruct import generate
+            t0, info = time.time(), dict(stage=st + 1)
+            if a.old_generate:  # tonight's old material is written by the model as it is now, from document starts
+                old_pool[:] = list(generate(model, a.old_generate, T + 1, eot, a.gen_batch, seed=a.seed * 1000 + st))
+                info["old"] = a.old_generate
+                print(f"  wrote {a.old_generate} old windows ({time.time() - t0:.0f} s), e.g. "
+                      f"{tok.decode(old_pool[0][1:].tolist())[:160]!r}", flush=True)
+            if a.rebuild_cue and len(buffers) > 1:  # earlier nights survive as cues; the model fills in the rest
+                cues = [r for b in buffers[:-1] for r in b]
+                pick = rng.choice(len(cues), size=min(a.rebuild_n, len(cues)), replace=False)
+                t1 = time.time()
+                rebuilt = list(generate(model, len(pick), T + 1, eot, a.gen_batch,
+                                        cues=np.stack([cues[j] for j in pick]), seed=a.seed * 1000 + 500 + st))
+                info["rebuilt"] = len(pick)
+                print(f"  rebuilt {len(pick)} of {len(cues)} earlier windows from {a.rebuild_cue}-token cues "
+                      f"({time.time() - t1:.0f} s)", flush=True)
+            info["seconds"] = round(time.time() - t0)
+            gen_stats.append(info)
         if mem is not None:  # instant: read the new text once, score everything before any training
             mem.arrive(names[st], new, a.memory_tokens)
             mem_curve.append(mem_evaluate(f"arrive {st + 1}"))
@@ -846,10 +876,15 @@ def continual(a):
                 distilled.append(prepare_distill(st))
             if buf is not None:  # sleep replays every night's buffer so far (as C2's sleep replays seen specialties)
                 pools["new"] = [r for b in buffers for r in b]
+                if a.rebuild_cue:  # ... earlier nights as rebuilt from their cues, in the same proportion
+                    n_prev = sum(len(b) for b in buffers[:-1])
+                    pools["new"] = list(buf) + ([rebuilt[i % len(rebuilt)] for i in range(n_prev)] if rebuilt else [])
             if old_pool:
                 pools["old"] = old_pool
             train(params, a.consolidate_steps, seen, a.sleep_new, lr / 3)
         pools.clear()
+        if buf is not None and a.rebuild_cue:  # tonight's windows are kept only as cues from now on
+            buffers[-1] = [r[:a.rebuild_cue] for r in buffers[-1]]
         if a.grow:
             for p in params:
                 p.requires_grad_(False)  # matured: this stage's modules stop changing
@@ -878,7 +913,8 @@ def continual(a):
                distilled=distilled, stream=a.stream, surprise=a.surprise, surprise_q=a.surprise_q,
                surprise_k=a.surprise_k,
                stream_share=a.stream_share, buffer_max=a.buffer_max, stream_oracle=a.stream_oracle,
-               stream_stats=stream_stats, old_pool=a.old_pool, old_from_days=a.old_from_days, old_read=old_read)
+               stream_stats=stream_stats, old_pool=a.old_pool, old_from_days=a.old_from_days, old_read=old_read,
+               old_refresh=a.old_refresh, old_generate=a.old_generate, rebuild_cue=a.rebuild_cue, rebuild_n=a.rebuild_n, gen_stats=gen_stats)
     os.makedirs(OUT_DIR, exist_ok=True)
     json.dump(res, open(os.path.join(OUT_DIR, f"continual_{a.name}.json"), "w"), indent=1)
     if a.save:  # the grown parts (safetensors), to load on top of the base export with load_grown (samples.py)
@@ -956,6 +992,14 @@ def main():
     ap.add_argument("--buffer_min", type=int, default=64, help="stream: below this, no growth or learning that night")
     ap.add_argument("--stream_oracle", type=int, default=0, help="stream control: the buffer keeps exactly the new "
                     "windows (a perfect detector)")
+    ap.add_argument("--old_refresh", type=int, default=0, help="stream: redraw the --old_pool windows from the corpus "
+                    "every night (the control for --old_generate)")
+    ap.add_argument("--old_generate", type=int, default=0, help="stream: replay by reconstruction, old material is this "
+                    "many windows the model writes itself each night (temperature 1, from document starts)")
+    ap.add_argument("--rebuild_cue", type=int, default=0, help="stream: earlier nights' buffers are kept only as their "
+                    "first N tokens; sleep replays windows the model rebuilds from them")
+    ap.add_argument("--rebuild_n", type=int, default=1024, help="stream, rebuild: windows rebuilt per night")
+    ap.add_argument("--gen_batch", type=int, default=32, help="stream: sequences written at once (old_generate/rebuild)")
     ap.add_argument("--old_pool", type=int, default=0, help="continual: replay old material from this many windows "
                     "kept from before (0 = the whole general corpus)")
     ap.add_argument("--old_from_days", type=int, default=0, help="stream, old pool: the windows each day judged familiar "

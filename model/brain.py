@@ -165,9 +165,11 @@ class ModuleBank(nn.Module):
         s.update({p: self.qkv_rows for p in self.qkv})
         return s
 
-    def layers(self, h, groups, T, cos, sin):
+    def layers(self, h, groups, T, cos, sin, kv=None):
         """The modules' blocks on h [E, groups*T, de]: attention runs within each of the E*groups
-        sequences of length T (rope tables [T, hd/2] shared, or [E*groups, T, hd/2] per sequence)."""
+        sequences of length T (rope tables [T, hd/2] shared, or [E*groups, T, hd/2] per sequence).
+        kv (incremental decoding, BrainCache.attend): kv(layer, q, k, v) stores this token's K/V and
+        attends over the cache instead."""
         E, H, Hkv, hd = self.E, self.H, self.Hkv, self.hd
         rope = (apply_rope if cos.dim() == 2 else rope_at) if self.attention else None
         for l in range(self.L):
@@ -176,19 +178,19 @@ class ModuleBank(nn.Module):
                 q = rope(norm(q.reshape(E * groups, T, H, hd)), cos, sin).transpose(1, 2)
                 k = rope(norm(k.reshape(E * groups, T, Hkv, hd)), cos, sin).transpose(1, 2)
                 v = v.reshape(E * groups, T, Hkv, hd).transpose(1, 2)
-                y = F.scaled_dot_product_attention(q, k, v, is_causal=T > 1, scale=self.attn_scale,
-                                                   enable_gqa=Hkv != H)
+                y = (F.scaled_dot_product_attention(q, k, v, is_causal=T > 1, scale=self.attn_scale,
+                                                    enable_gqa=Hkv != H) if kv is None else kv(l, q, k, v))
                 h = h + torch.bmm(y.transpose(1, 2).reshape(E, groups * T, H * hd), self.proj[l].transpose(1, 2))
             h = h + torch.bmm(F.relu(torch.bmm(norm(h), self.fc[l].transpose(1, 2))).square(),
                               self.fc2[l].transpose(1, 2))
         return h
 
-    def forward(self, x, cos, sin, gates=None):
+    def forward(self, x, cos, sin, gates=None, kv=None):
         B, T, D = x.shape
         E, de = self.E, self.de
         N = B * T
         h = (norm(x).reshape(N, D) @ self.w_in.t()).view(N, E, de).transpose(0, 1).contiguous()  # [E, N, de]
-        h = self.layers(h, B, T, cos, sin)
+        h = self.layers(h, B, T, cos, sin, kv)
         mixed = h if gates is None else h * gates.reshape(N, E).t()[..., None].to(h.dtype)
         out = mixed.transpose(0, 1).reshape(N, E * de) @ self.w_out  # gate, then one GEMM over all modules
         return out.view(B, T, D), h
@@ -443,12 +445,24 @@ class BrainGPT(GPT):
         return out[:, :T], dropped.float().detach()
 
     def forward(self, idx, cache=None, pos=0):
-        assert cache is None, "BrainGPT has no incremental decoding yet"
+        """With cache (a BrainCache): incremental decoding, one token per call at position cache.pos (call
+        cache.advance(1) after it); pos is ignored."""
         c = self.cfg
         T = idx.size(1)
-        cos, sin = self.rope_cos[:T], self.rope_sin[:T]
-        cos_m, sin_m = self.rope_cos_m[:T], self.rope_sin_m[:T]
-        ctx = {"cache": None, "v0": None, "kv": None, "rope_mla": None}
+        if cache is not None:
+            assert T == 1 and not self.training, "BrainGPT decodes one token at a time, in eval mode"
+            assert c.module_mode == "routed_attn" and not (c.judge or self.critic is not None or self.memory is not None
+                                                          or getattr(self, "grown", None) is not None), \
+                "incremental decoding covers routed_attn banks and grown_at modules only"
+            cache.begin()
+            p = cache.pos
+            cos, sin = self.rope_cos.index_select(0, p), self.rope_sin.index_select(0, p)
+            cos_m, sin_m = self.rope_cos_m.index_select(0, p), self.rope_sin_m.index_select(0, p)
+        else:
+            cos, sin = self.rope_cos[:T], self.rope_sin[:T]
+            cos_m, sin_m = self.rope_cos_m[:T], self.rope_sin_m[:T]
+        ctx = {"cache": cache, "v0": None, "kv": None, "rope_mla": None}
+        kv = None if cache is None else cache.attend
         x = norm(self.wte(idx)).bfloat16()
         L = len(self.blocks)
         skips, draft, err, logvar, balance = [], None, None, None, x.new_zeros((), dtype=torch.float32)
@@ -474,8 +488,12 @@ class BrainGPT(GPT):
                     else:
                         S = c.n_shared
                         if self.shared is not None:
-                            add = add + (shared_out if c.judge else self.shared(x, cos_m, sin_m)[0])
-                        routed, dropped = self.routed_bank(x, gates[..., S:], fired[..., S:], cos_m, sin_m)
+                            add = add + (shared_out if c.judge else self.shared(x, cos_m, sin_m)[0] if kv is None else
+                                         self.shared(x, cos_m, sin_m, kv=kv("shared", self.shared))[0])
+                        if cache is None:
+                            routed, dropped = self.routed_bank(x, gates[..., S:], fired[..., S:], cos_m, sin_m)
+                        else:
+                            routed = cache.routed(self.bank, x, gates[..., S:], fired[..., S:], cos_m, sin_m)
                         add = add + routed
                     usage = fired.detach().flatten(0, 1).mean(0)
                 if self.memory is not None:
@@ -507,7 +525,8 @@ class BrainGPT(GPT):
                 for key, bank_i in grown_at.items():
                     if key.split("_")[0] == str(i):
                         g = torch.sigmoid(self.grown_gates[key](norm(x)).float()).to(x.dtype)
-                        x = x + bank_i(x, cos_m, sin_m, g)[0]
+                        x = x + (bank_i(x, cos_m, sin_m, g) if cache is None else
+                                 bank_i(x, cos_m, sin_m, g, kv=kv("grown_" + key, bank_i)))[0]
             if i < self.n_skip:
                 skips.append(x)
         out = norm(x).bfloat16()
@@ -659,3 +678,81 @@ class BrainGPT(GPT):
         critic = "no critic" if not c.critic else "critic" + (" detached" if c.critic_detach else "") + \
             {0: "", 1: " gated by trust", 2: " gated by trust x confidence"}[c.critic_gate]
         return f"brain trunk{c.trunk_layers} gate{c.gate_layers} {bank} {mem} {critic}"
+
+
+class BrainCache:
+    """Incremental decoding for BrainGPT (wai_struct: replay by reconstruction), one token per forward; a prompt is fed
+    a token at a time. Every shape is fixed and the position is a GPU tensor, so a decoding step can be captured once
+    as a CUDA graph and replayed (reconstruct.py): eager decoding of the grown model is bound by Python overhead, ~2,000
+    small kernels per token. Attention reads the whole buffer under a mask (positions not yet written are masked).
+    - The trunk's K/V: [batch, kv heads, max_len, head dim] per K/V layer.
+    - Each module bank (shared, routed, every grown part): its own K/V per layer, [E * batch, ...], made on first use.
+    - Routed modules attend only over their own earlier tokens, and a module takes a token only while it has capacity
+      left, as in a full forward over a window of `window` tokens (default max_len), so decoding reproduces it."""
+
+    def __init__(self, model, batch, max_len, window=None, dtype=torch.bfloat16):
+        c = model.cfg
+        self.B, self.max_len, self.dtype = batch, max_len, dtype
+        self.dev = dev = model.wte.weight.device
+        shape = (batch, c.cache_layout[0], max_len, c.cache_layout[1])
+        self.k = [torch.zeros(shape, dtype=dtype, device=dev) for _ in range(c.n_kv_layers)]
+        self.v = [torch.zeros(shape, dtype=dtype, device=dev) for _ in range(c.n_kv_layers)]
+        R = c.n_modules - c.n_shared
+        T = window or max_len
+        self.C = min(T, math.ceil(c.capacity * T * c.top_k / R)) if R else 0
+        self.pos = torch.zeros(1, dtype=torch.long, device=dev)  # the position being decoded
+        self.ar = torch.arange(max_len, device=dev)
+        self.count = torch.zeros(batch, R, dtype=torch.long, device=dev)  # tokens routed to each module so far
+        self.valid = torch.zeros(R * batch, max_len, dtype=torch.bool, device=dev)  # ... and kept (capacity)
+        self.banks = {}
+        self.upto = None
+
+    def reset(self):
+        """Back to an empty cache (the buffers stay: what isn't rewritten is masked)."""
+        self.pos.zero_()
+        self.count.zero_()
+        self.valid.zero_()
+
+    def advance(self, n):
+        self.pos += n
+
+    def begin(self):
+        """At the start of each forward: which positions are written so far, this one included."""
+        self.upto = (self.ar <= self.pos)[None, None, None, :]
+
+    def extend(self, i, q, k, v):  # the trunk's attention layers (gpt.py)
+        self.k[i].index_copy_(2, self.pos, k.to(self.dtype))
+        self.v[i].index_copy_(2, self.pos, v.to(self.dtype))
+        return self.k[i], self.v[i], self.upto, False
+
+    def attend(self, name, bank, mask=None):
+        """Attention for one bank at the current position: kv(layer, q, k, v) stores this token's K/V and attends
+        over the bank's buffer (mask [E * batch, max_len]: what each sequence may see; default all written so far)."""
+        if name not in self.banks:
+            shape = (bank.E * self.B, bank.Hkv, self.max_len, bank.hd)
+            self.banks[name] = [(torch.zeros(shape, dtype=self.dtype, device=self.dev),
+                                 torch.zeros(shape, dtype=self.dtype, device=self.dev)) for _ in range(bank.L)]
+        kvs = self.banks[name]
+        m = self.upto if mask is None else mask[:, None, None, :]
+
+        def kv(l, q, k, v):
+            K, V = kvs[l]
+            K.index_copy_(2, self.pos, k.to(self.dtype))
+            V.index_copy_(2, self.pos, v.to(self.dtype))
+            # grouped-query attention without copying K/V per query head: the query heads sharing a K/V head (one
+            # token each) stand in as that head's query positions
+            N, H, _, hd = q.shape
+            y = F.scaled_dot_product_attention(q.to(self.dtype).reshape(N, bank.Hkv, H // bank.Hkv, hd), K, V,
+                                               attn_mask=m, scale=bank.attn_scale)
+            return y.reshape(N, H, 1, hd)
+        return kv
+
+    def routed(self, bank, x, gates, fired, cos, sin):
+        """The routed bank for one token: every module runs (cheap at one token), only the chosen ones that still have
+        capacity count, and only those keep this token's K/V visible to later tokens. Returns [B, 1, D]."""
+        fired = fired[:, 0].bool()                                     # [B, R]
+        keep = fired & (self.count < self.C)
+        self.count += fired.long()
+        self.valid.index_copy_(1, self.pos, keep.t().reshape(-1, 1))   # sequences are module-major in the bank
+        mask = self.valid | (self.ar == self.pos)[None, :]             # a dropped token's own (discarded) output
+        return bank(x, cos, sin, gates * keep[:, None].to(gates.dtype), kv=self.attend("routed", bank, mask))[0]
