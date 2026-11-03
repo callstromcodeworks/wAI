@@ -332,3 +332,41 @@ ceilings are in BEST.md, "Memory ceiling".
   | brain, 9-module bank, FP8 | both | 2.8980 | 65k | 0.9 GiB |
 
   At full size the slowdown should be smaller (a tiny model is dominated by launch overhead); not measured yet.
+
+### R1_spec_reverse: does accumulated knowledge make new learning harder? (started 2:35 PM Nov 2)
+Owner's hypothesis: the more (conflicting) knowledge a mind holds, the harder new knowledge is to take in. The run
+uses the 10 specialties in reverse order, with C2's settings exactly (cls_queue.sh, no memory, ~1 h 40 min). The
+comparison is each specialty's gain in its own stage (bpb just before minus just after) against C2 and C2s, whose
+first 10 stages are the forward order. Haskell moves from position 1 to 10 and space from 10 to 1.
+- **Noise:** between C2 and C2s, the gain per specialty differs by sd 0.0027 (max 0.0062).
+- **Confound:** a specialty learned late may already have improved through transfer (Haskell after Lua, Fortran and
+  Rust). So the total gain from the start is compared too.
+- **Script:** model/order_effect.py (gain = curve[s-1] - curve[s] for the specialty learned at stage s;
+  total = curve[0] - curve[10]).
+- **Result (done 4:17 PM, no errors): later means less for the English-text specialties, not for code.**
+  - Order doesn't change the total: mean gain 0.0328 vs 0.0321 and 0.0311 forward. Order moves learning between
+    specialties.
+  - **Text specialties** (medical, philosophy, law, logic, music, space):
+    - All six moved in the predicted direction, by 3–12× their noise (rms 0.0005 between C2 and C2s).
+    - Space learns 0.0101 at position 1 against 0.0039 at position 10 (2.6×). Medical learns half as much at
+      position 9 as at position 2.
+    - Correlation -0.90, about -12% per position later.
+  - **Code specialties** (haskell, lua, fortran, rust): -1.3% per position, within noise (rms 0.0044). Haskell learns
+    the same at position 10 as at position 1.
+  - **Not transfer or placement:** every specialty gets the same depths in both orders. The text specialties start
+    their stage from the same bpb (space 1.0787 forward, 1.0788 reverse), so nothing learned earlier had helped
+    them.
+  - **Not capacity:** old modules are frozen and each stage trains 6 new ones, so capacity per stage is constant.
+    Two things do accumulate:
+    - (a) the frozen modules of earlier stages, all active in the forward pass;
+    - (b) sleep. Its 10% specialty share is split over every specialty seen so far: the current one gets 10% at
+      stage 1 and 1% at stage 10, and the new modules spend sleep fitting older material. In exposure this is
+      small: 20 against 2 batch-equivalents out of ~320 per stage.
+    - (b) is this architecture's version of the owner's "combine it with everything learned before". These runs
+      can't separate (a) from (b): bpb is measured only after sleep.
+  - **Reading:** accumulation hurts subtle learning (small refinements on text the base already reads well). Big
+    gains (a new programming language) hold up.
+  - **Total** (after all 10 stages, forgetting included) shows the same pattern: -39% per 9 positions later
+    overall, against -46% for gain.
+  - **Possible follow-up (not queued):** evaluate after wake as well as after sleep, to split (a) from (b). If (a)
+    dominates, pruning and recycling (wai_struct STRUCT_PLAN item 5) moves up.

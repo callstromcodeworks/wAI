@@ -6,6 +6,7 @@ cd "$(dirname "$(readlink -f "$0")")"
 PY="$(cd .. && pwd)/.venv/bin/python"
 B=runs/sweep_b32k_sparseB32c2_t1b
 D=haskell,medical,lua,philosophy,law,fortran,logic,music,rust,space
+DR=space,rust,music,logic,fortran,law,philosophy,lua,medical,haskell  # D reversed
 X="--per_stage 2 --stage_steps 400 --consolidate_steps 200 --lr_adam 0.006 --init copy --replay 0.25 --sleep_new 0.1 --depths 1,3,5"
 M="--memory_tokens 5e5 --memory_prune 0.5 --memory_eval_tokens 100000"
 jobs=(
@@ -22,6 +23,9 @@ jobs=(
   # C2 again, keeping the modules, for sample replies that need the specialties
   # (LOCAL_PLAN.md "Next run: C2s"); started by the owner Nov 2.
   "continual $B --domains $D,instruct,chat $X --multi_depth 1 --placement dissonance --save runs/forgetting/C2s_spec_instruct_chat --name C2s_spec_instruct_chat"
+  # the 10 specialties in reverse order (owner, Nov 2): do later stages learn less (accumulated knowledge making new
+  # learning harder)? Each specialty's gain in its own stage vs C2/C2s's first 10 stages (forward order, same settings)
+  "continual $B --domains $DR $X --multi_depth 1 --placement dissonance --name R1_spec_reverse"
 )
 mkdir -p runs/forgetting
 for j in "${jobs[@]}"; do
