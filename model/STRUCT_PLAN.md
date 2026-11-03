@@ -79,6 +79,16 @@ Then the structural changes below, best value first.
 - The oracle (S1o) separates the cost of detection from the other differences: fixed windows instead of random
   ones, and familiar text in the buffer acting as extra replay.
 
+**S1o_stream_oracle** (perfect detector, 6:32–8:25 PM): **detection costs nothing.**
+- Mean total 0.0317, against S1's 0.0319. English -0.0001, code +0.0013.
+- Law (0.0008), music (0.0026), philosophy (0.0055) and logic (0.0071) are low here too, so the prose dip against C2
+  is not detection.
+- Haskell is high in both stream runs (0.115 and 0.119, against 0.10).
+- Both come from the night, which repeats the same consecutive windows ~3× instead of drawing windows at random
+  offsets. That seems to help a code specialty that is learned from scratch, and to cost the prose a little, whose
+  gains are small refinements.
+- Item 1 done: the model finds what is new by itself and learns it as well as when told.
+
 ## Brain-like structure roadmap (moved from main's LOCAL_PLAN.md, Nov 2)
 The owner wants to "push the metaphor to the extreme". Clarified: brain-like in *structure*, not mimicking biology
 (neuron mechanics) and not about ability or sensation. The question is how closely the model's organization can

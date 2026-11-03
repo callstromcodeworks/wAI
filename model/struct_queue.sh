@@ -14,6 +14,14 @@ jobs=(
   "continual $B --domains $D $X $G --stream 1 --name S1_stream"
   # its control: a perfect detector (the buffer = exactly the day's specialty windows)
   "continual $B --domains $D $X $G --stream 1 --stream_oracle 1 --name S1o_stream_oracle"
+  # 3. experience as the only data: S1, with old material replayed from N windows kept from before instead of the
+  # whole corpus (~9,000 old windows drawn per night, ~90k over the run)
+  "continual $B --domains $D $X $G --stream 1 --old_pool 4096 --name S3_pool4k"
+  # ... and the windows each day judged familiar join the pool (reservoir of 4096): replay only what was read
+  "continual $B --domains $D $X $G --stream 1 --old_pool 4096 --old_from_days 1 --name S3_pool4k_days"
+  "continual $B --domains $D $X $G --stream 1 --old_pool 1024 --name S3_pool1k"
+  "continual $B --domains $D $X $G --stream 1 --old_pool 16384 --name S3_pool16k"
+  "continual $B --domains $D $X $G --stream 1 --old_pool 256 --name S3_pool256"
 )
 mkdir -p runs/forgetting
 for j in "${jobs[@]}"; do
