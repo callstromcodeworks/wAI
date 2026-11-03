@@ -12,7 +12,9 @@ policy stores the same number of episodes per day (--cap, M2 stored 500k tokens 
   at the 0.9 quantile of familiar windows held outside the day; forgetting.py --stream's buffer);
 - buffer p<P: from the buffer's windows, only the tokens the model predicts with p(next) < P (more windows read
   for the same number of episodes);
-- labeled, labeled p<P: the specialty's own windows (a perfect detector), all tokens / surprising tokens only.
+- labeled, labeled p<P: the specialty's own windows (a perfect detector), all tokens / surprising tokens only;
+- buffer_rR, labeled_rR: a random share R of the tokens, the control for p<P (as much text covered, without choosing
+  by surprise; R=0.6 matches p<0.5's share).
 Each memory is keyed by the model and scored like M2 (episodic.py score: blend chosen on the first half of each
 held-out text, reported on the second): gain in bpb over the model alone, per specialty and on familiar English
 and code. Philosophy is left out of means (18% of its held-out text recurs verbatim in logic's training text)."""
@@ -104,14 +106,15 @@ def main():
     texts.update({"english": shard("fineweb-edu", "val"), "code": shard("code", "val")})
     results = {}
     for pol in a.policies.split(","):
-        src, _, p = pol.partition("_p")
+        src, _, v = pol.partition("_")
+        p, r = (float(v[1:]) if v[:1] == c else None for c in "pr")
         mem = EpisodicMemory(model, token_bytes, k=a.memory_k)
         stored = read = 0
         for n in names:
             rows = days[n]["rows" if src == "all" else src]
             rows = rows[rng.permutation(len(rows))]
-            s, r = mem.store(n, rows, max_p=float(p) if p else None, cap=a.cap)
-            stored, read = stored + s, read + r
+            s, rd = mem.store(n, rows, max_p=p, cap=a.cap, rate=r)
+            stored, read = stored + s, read + rd
         res = {t: mem.score(ids, a.eval_tokens) for t, ids in texts.items()}
         gain = {t: (r["model"] - r["memory"]) / r["model"] for t, r in res.items()}
         mean = np.mean([gain[n] for n in names if n != "philosophy"])

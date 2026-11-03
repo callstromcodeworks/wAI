@@ -89,6 +89,43 @@ Then the structural changes below, best value first.
   gains are small refinements.
 - Item 1 done: the model finds what is new by itself and learns it as well as when told.
 
+### 2. Selective hippocampus (Nov 2)
+**Probe** (model/selective_memory.py, 8:25–10:34 PM, inference only, no errors):
+- **Cortex:** main's C2s model (base + 36 grown parts), so memory sits on top of consolidated modules, as in M2's
+  "final" numbers.
+- **Days:** each specialty arrives as a day of 1,500 of its training windows mixed with 1,500 familiar windows,
+  unlabeled. The buffer is today@6, as in S1: precision 0.91–0.94, recall 0.89–1.00 (law lowest).
+- **Equal capacity:** every policy stores 500k episodes per day (5M in all) and is scored like M2 (gain over the
+  model alone, blend chosen on the first half of each held-out text).
+
+| policy: what is stored | text read for 5M episodes | mean gain (9, no philosophy) | per M episodes |
+|---|---|---|---|
+| all: every window as it arrives | 5.0M | 0.38% | 0.075% |
+| buffer: windows the detector kept | 5.0M | 0.77% | 0.153% |
+| buffer, tokens with p(next) < 0.9 | 6.4M | 0.94% | 0.189% |
+| buffer, tokens with p(next) < 0.5 | 8.3M | **1.17%** | **0.234%** |
+| labeled: the specialty's windows (perfect detector) | 5.0M | 0.85% | 0.170% |
+| labeled, p(next) < 0.5 | 8.3M | 1.14% | 0.228% |
+
+- **Storing only what surprised it triples the value of each stored episode** (0.234% against 0.075% per M).
+  - Choosing windows (the day's detector) doubles it, because half of what arrives is familiar text.
+  - Choosing tokens (p < 0.5) adds half again, because the same capacity covers 1.65× as much new text.
+- **Label-free matches labeled again.** With p < 0.5 the buffer even edges out the perfect detector (1.17% against
+  1.14%, within noise). The familiar windows the detector kept by mistake are well predicted, so token selection
+  drops them anyway. Storing whole windows, the buffer is a little behind (0.77% against 0.85%).
+- **Lua carries the mean** (5.7% with buffer p < 0.5, against 2.5% storing everything). Without Lua the order is
+  the same: all 0.12%, buffer 0.51%, labeled 0.45%, buffer p < 0.5 0.60%, labeled p < 0.5 0.60%.
+  - From the buffer or the labels: Rust 1.7–2.6%, Haskell ~0.8%, space up to 1.0%.
+  - Law and logic stay at ~0 under every policy: the blend chooses not to use memory there.
+  - Fortran is the exception to token selection: +0.4–0.5% storing whole windows, 0 with p < 0.9 or 0.5.
+- **No harm:** English and code +0.00% under every policy (the blend gives memory no weight there).
+- **Against M2** (labeled, every token, on M2's model): 1.00% with 5M episodes, 0.82% for the episodes held after
+  release at p ≥ 0.5. Here the labeled all-token policy gives 0.85% on C2s's model with a different day sample, so
+  only the comparison inside this probe is like for like.
+- **Open control:** the p < 0.5 policies also cover more text. A random 60% of tokens covers as much without
+  choosing by surprise (`buffer_r0.6`, `labeled_r0.6`), and a second `buffer_p0.5` with a different reading order
+  gives the probe's noise. Queued after the old-pool sweep (tmux s4, runs/selective/P2c_C2s.log, ~1 h).
+
 ## Brain-like structure roadmap (moved from main's LOCAL_PLAN.md, Nov 2)
 The owner wants to "push the metaphor to the extreme". Clarified: brain-like in *structure*, not mimicking biology
 (neuron mechanics) and not about ability or sensation. The question is how closely the model's organization can
