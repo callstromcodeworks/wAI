@@ -328,6 +328,12 @@ Owner's answers (Nov 3):
      does. Only the number of sessions changes.
    - Scored as now: each specialty's gain at the end against S1 (the same text in one session) and across 2/4/8,
      plus English/code drift and parts count.
+   - **Drift and savings (added Nov 3, owner: "what we don't use will drift"; accepted).** Each topic's held-out
+     score just before every return shows how far it drifted while unused. The model's frozen parts don't decay,
+     so drift here is interference from later learning. On each return, the steps needed to win back the lost
+     ground, against the steps the topic first took to reach that level, give Ebbinghaus's savings: if relearning
+     is faster, the knowledge was still in the parts, only covered by interference. Needs the topic scored a few
+     times within a night, not only at its end.
 2. **Applying new knowledge to what was there (the mechanism).** On a day whose buffer matches a topic already
    held, no new parts grow. The parts that hold that topic are unfrozen and learn the new text.
    - Matching is label-free: state neighbors between today's buffer and earlier days' buffers, as the today@6
