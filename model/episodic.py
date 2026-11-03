@@ -68,6 +68,7 @@ class EpisodicMemory:
         self.dis_depth = getattr(model.cfg, "trunk_layers", 3) - 1  # the routing depth (as forgetting.py's sleep tags)
         self.rows = {}  # tag -> token windows [r, T + 1] (uint16): the raw episodes, kept to re-encode
         self.keep = {}  # tag -> bool mask over that tag's positions [r * T]: still held (not consolidated)
+        self.sel = {}  # tag -> bool mask over positions [r * T]: stored at all (store(); absent = every position)
         self.blocks = []  # pinned fp16 keys, one block per tag in self.rows order (arrivals never copy old keys)
         self.key_sq = self.vals = self.held = None  # on the GPU, over all episodes in the same order
         self.keyed_by = None  # fingerprint of the model that made the current keys
@@ -113,6 +114,34 @@ class EpisodicMemory:
         self._add(tag, h, y)
         self.keyed_by = fp
 
+    @torch.no_grad()
+    def store(self, tag, rows, max_p=None, cap=None, chunk_rows=128):
+        """Selective arrival (wai_struct): read windows rows [r, T + 1] in order and store only the episodes the model
+        predicts with p(next) < max_p (every one with max_p None), until cap are stored; rows after the last stored
+        episode are dropped. keep (and so consolidation) then runs over the stored episodes only. Returns how many
+        episodes were stored and how many tokens were read to find them."""
+        hs, ys, sels, n = [], [], [], 0
+        for c in range(0, len(rows), chunk_rows):
+            if cap is not None and n >= cap:
+                break
+            h, y, lp = encode(self.model, rows[c:c + chunk_rows].astype(np.int64))
+            sel = torch.ones_like(y, dtype=torch.bool) if max_p is None else lp < math.log(max_p)
+            if cap is not None and n + int(sel.sum()) > cap:
+                sel[int(torch.nonzero(sel)[cap - n - 1]) + 1:] = False
+            hs.append(h[sel])
+            ys.append(y[sel])
+            sels.append(sel.cpu())
+            n += int(sel.sum())
+            del h, y, lp
+        sel = torch.cat(sels) if sels else torch.zeros(0, dtype=torch.bool)
+        n_rows = int(torch.nonzero(sel)[-1]) // T + 1 if bool(sel.any()) else 0
+        self.rows[tag] = rows[:n_rows].astype(np.uint16)
+        self.sel[tag] = sel[:n_rows * T]
+        self.keep[tag] = torch.ones(n, dtype=torch.bool)
+        self._add(tag, torch.cat(hs), torch.cat(ys))
+        self.keyed_by = self.fingerprint()
+        return n, n_rows * T
+
     def reencode(self, prune=None):
         """Recompute every key with the current model; with prune=P mark episodes it now predicts with p >= P as
         released. Returns {tag: share of that tag's episodes still held}."""
@@ -120,6 +149,9 @@ class EpisodicMemory:
         self.version += 1
         for tag, rows in self.rows.items():
             h, y, lp = encode(self.model, rows.astype(np.int64))
+            if tag in self.sel:  # stored selectively: re-key only what was stored
+                m = self.sel[tag].cuda()
+                h, y, lp = h[m], y[m], lp[m]
             if prune is not None:
                 self.keep[tag] &= (lp < math.log(prune)).cpu()
             self._add(tag, h, y)

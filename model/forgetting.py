@@ -688,7 +688,7 @@ def continual(a):
                      false_keep=int((keep & ~is_new).sum()) / max(1, n_old))
         print(f"  day {st + 1}: read {len(rows)} windows ({n_new} new), kept {stats['kept']} | precision "
               f"{stats['precision']:.3f} recall {stats['recall']:.3f} familiar kept {stats['false_keep']:.3f}", flush=True)
-        return [rows[i] for i in np.flatnonzero(keep)], stats
+        return [rows[i] for i in np.flatnonzero(keep)], stats, [rows[i] for i in np.flatnonzero(~keep)]
 
     if a.replay_source == "recall":  # old material comes only from the model's own memories, wake and sleep
         general = [recall(a.recall_seqs)]
@@ -762,13 +762,29 @@ def continual(a):
                      or a.replay_source != "data" or a.overgrow > 1 or a.stages == 1):
         raise SystemExit("--stream needs --domains with grown modules, more than one stage, and none of: adapters, "
                          "memory, sleep priority, recall, overgrow")
+    # experience as the only data (--old_pool N): old material is replayed from N windows kept from before instead of
+    # the whole corpus; with --old_from_days the windows each day judged familiar join it (reservoir: N kept, each
+    # window read so far equally likely to be among them)
+    old_pool = [window(general[0] if rng.random() < 0.6 else general[1]) for _ in range(a.old_pool)]
+    old_read = len(old_pool)
+
+    def experience(rows):
+        nonlocal old_read
+        for r in rows:
+            old_read += 1
+            if len(old_pool) < a.old_pool:
+                old_pool.append(r)
+            elif (j := int(rng.integers(old_read))) < a.old_pool:
+                old_pool[j] = r
     for st in range(a.stages):
         new = stages[st]
         seen.append(new)
         buf = None
         if a.stream:  # day: read the unlabeled stream, keep what surprises
-            buf, stats = day(st)
+            buf, stats, rest = day(st)
             stream_stats.append(stats)
+            if a.old_pool and a.old_from_days:
+                experience(rest)
             if len(buf) < a.buffer_min:  # nothing much surprised it: no growth, nothing to learn tonight
                 print(f"  night {st + 1}: buffer below {a.buffer_min} windows, no growth", flush=True)
                 curve.append(evaluate(f"day {st + 1} (quiet)"))
@@ -817,6 +833,8 @@ def continual(a):
         lr = a.lr_adam if a.grow else a.lr_full
         if buf is not None:  # night, first part: learn from today's buffer (with the usual replay of general text)
             pools["new"] = buf
+        if old_pool:
+            pools["old"] = old_pool
         train(params, a.stage_steps, [new], 1.0 - a.replay, lr)
         if a.overgrow > 1:  # most new neurons die; the ones that proved useful survive
             pruned.append(prune(keys[0], a.per_stage, new))
@@ -828,6 +846,8 @@ def continual(a):
                 distilled.append(prepare_distill(st))
             if buf is not None:  # sleep replays every night's buffer so far (as C2's sleep replays seen specialties)
                 pools["new"] = [r for b in buffers for r in b]
+            if old_pool:
+                pools["old"] = old_pool
             train(params, a.consolidate_steps, seen, a.sleep_new, lr / 3)
         pools.clear()
         if a.grow:
@@ -858,7 +878,7 @@ def continual(a):
                distilled=distilled, stream=a.stream, surprise=a.surprise, surprise_q=a.surprise_q,
                surprise_k=a.surprise_k,
                stream_share=a.stream_share, buffer_max=a.buffer_max, stream_oracle=a.stream_oracle,
-               stream_stats=stream_stats)
+               stream_stats=stream_stats, old_pool=a.old_pool, old_from_days=a.old_from_days, old_read=old_read)
     os.makedirs(OUT_DIR, exist_ok=True)
     json.dump(res, open(os.path.join(OUT_DIR, f"continual_{a.name}.json"), "w"), indent=1)
     if a.save:  # the grown parts (safetensors), to load on top of the base export with load_grown (samples.py)
@@ -936,6 +956,10 @@ def main():
     ap.add_argument("--buffer_min", type=int, default=64, help="stream: below this, no growth or learning that night")
     ap.add_argument("--stream_oracle", type=int, default=0, help="stream control: the buffer keeps exactly the new "
                     "windows (a perfect detector)")
+    ap.add_argument("--old_pool", type=int, default=0, help="continual: replay old material from this many windows "
+                    "kept from before (0 = the whole general corpus)")
+    ap.add_argument("--old_from_days", type=int, default=0, help="stream, old pool: the windows each day judged familiar "
+                    "join the pool (reservoir sampling keeps --old_pool)")
     ap.add_argument("ckpt", nargs="?")
     ap.add_argument("--train", default="all")
     ap.add_argument("--docs", default=None, help="prepare: JSONL file of documents ({\"text\": ...} per line)")

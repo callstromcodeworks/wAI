@@ -64,6 +64,21 @@ Then the structural changes below, best value first.
   4:37 PM). Compare: `python model/stream_compare.py C2_spec_instruct_chat C2s_spec_instruct_chat S1_stream
   S1o_stream_oracle`.
 
+**S1_stream result** (4:36–6:32 PM, no errors): **without labels it learns as much as labeled C2.**
+- Mean total kept per specialty: 0.0319, against 0.0314 for C2 and 0.0304 for C2s. English -0.0002, code
+  +0.0010: no forgetting, as in C2.
+- Buffer: mean precision 0.922, recall 0.953.
+  - Code specialties: recall 0.99–1.00.
+  - English specialties: recall 0.87–0.95. Law was lowest (0.871), then philosophy, music and space (~0.91).
+  - Familiar text kept by mistake: 6–10% of it.
+- Per specialty, total at stage 10 against C2/C2s, where the C2/C2s noise is sd 0.0027:
+  - Haskell 0.119 against 0.101, well above noise. Space and medical are a little higher.
+  - Law (0.0015 against 0.0025), philosophy (0.0047 against 0.0074) and logic (0.0062 against 0.0089) are lower.
+    These are the specialties with the lowest recall. Philosophy and logic share text (main LOCAL_PLAN, M1), so
+    they also pass less to each other.
+- The oracle (S1o) separates the cost of detection from the other differences: fixed windows instead of random
+  ones, and familiar text in the buffer acting as extra replay.
+
 ## Brain-like structure roadmap (moved from main's LOCAL_PLAN.md, Nov 2)
 The owner wants to "push the metaphor to the extreme". Clarified: brain-like in *structure*, not mimicking biology
 (neuron mechanics) and not about ability or sensation. The question is how closely the model's organization can
