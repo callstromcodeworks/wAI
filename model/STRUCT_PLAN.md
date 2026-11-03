@@ -135,9 +135,19 @@ Then the structural changes below, best value first.
 - **Against M2** (labeled, every token, on M2's model): 1.00% with 5M episodes, 0.82% for the episodes held after
   release at p ≥ 0.5. Here the labeled all-token policy gives 0.85% on C2s's model with a different day sample, so
   only the comparison inside this probe is like for like.
-- **Open control:** the p < 0.5 policies also cover more text. A random 60% of tokens covers as much without
-  choosing by surprise (`buffer_r0.6`, `labeled_r0.6`), and a second `buffer_p0.5` with a different reading order
-  gives the probe's noise. Runs first in the Nov 3 queue (struct_queue.sh, tmux s5, runs/selective/P2c_C2s.log).
+- **Control (P2c, Nov 3 9:02–10:21 AM, runs/selective/P2c_C2s.log):** a random 60% of tokens covers as much text
+  as p < 0.5 without choosing by surprise.
+
+  | policy | text read | mean gain | per M episodes |
+  |---|---|---|---|
+  | buffer, random 60% of tokens | 8.34M | 0.79% | 0.157% |
+  | labeled, random 60% of tokens | 8.34M | 0.95% | 0.189% |
+  | buffer, p < 0.5 (rerun, another reading order) | 8.27M | 1.10% | 0.219% |
+
+  - **Surprise is what helps, not coverage.** Covering 1.65× the text at random adds almost nothing to the buffer
+    (0.77% → 0.79%); choosing the same amount by surprise gives 1.10–1.17%. The reading above ("adds half again,
+    because the same capacity covers 1.65× as much new text") was wrong about the cause.
+  - Noise between reading orders: 1.17% against 1.10%, so ~0.07. Surprise beats random by ~0.3, about 4× that.
 
 ### 3. Experience as the only data (Nov 2–3)
 **Sweep** (struct_queue.sh, 10:34 PM – 8:26 AM, no errors). S1, but old material in the wake's 25% replay and in
@@ -188,6 +198,47 @@ windows from the whole corpus. A night draws ~9,000 old windows, so over the run
 - **Queue** (struct_queue.sh, tmux s5, from 9:02 AM): P2c (item 2 control) → P2b (pattern memory) → S3b_fresh2k
   (control: 2,048 fresh corpus windows every night) → S3b_gen2k (2,048 windows the model writes every night) →
   S3b_gen2k_cue32 (also earlier nights' buffers kept as 32-token cues and rebuilt, 1,024 a night).
+
+### 2b. Pattern hippocampus (Nov 3, 10:21 AM–12:22 PM, runs/selective/P2b_C2s.log)
+Item 2's best store (buffer, p < 0.5, 5M episodes on C2s), with keys as product-quantized codes. "Use": the 25% of
+episodes recalled most during a use period (1,280 windows, 1.3M queries) keep fine codes, the rest coarse.
+
+| keys | bytes per episode | key memory | mean gain (9, no philosophy) |
+|---|---|---|---|
+| exact (fp16) | 1,536 | 7,324 MB | 1.12% |
+| fine code | 96 | 458 MB | **0.96%** |
+| coarse code | 32 | 153 MB | 0.05% |
+| use: most-recalled quarter fine, rest coarse | 48 | 229 MB | 0.08% |
+| random quarter fine, rest coarse | 48 | 229 MB | 0.08% |
+| use, never-recalled episodes released (14%) | — | — | 0.05% |
+
+- **Patterns instead of verbatim keys work.** Fine codes keep 86% of the gain at 1/16 of the bytes (2.1% per GB
+  against 0.16% for exact keys).
+- **Precision following use did nothing as built.** Use and random tie at 0.08%, both close to all-coarse. A
+  shared kNN search across mixed precision is dominated by its coarse majority: noisy coarse keys crowd in as
+  false neighbors, so sharpening the most-used quarter can't show.
+- **Releasing the never-recalled 14%** cost the little that was left (0.08% → 0.05%).
+- Not tested: keep only the most-used quarter (fine codes) and release the rest, which is closer to "used patterns
+  stay sharp, unused ones fade".
+
+### 3b. Replay by reconstruction: the control (Nov 3, 12:22–2:22 PM)
+S3b_fresh2k: as S1, but old material is 2,048 corpus windows redrawn every night (~9,000 drawn per night, so each
+window ~4.4 times in one night and never again).
+
+| run | old material | mean kept | English | code |
+|---|---|---|---|---|
+| S1_stream | whole corpus | 0.0319 | -0.0002 | +0.0010 |
+| S3_pool16k | fixed 16k windows | 0.0314 | +0.0006 | +0.0015 |
+| S3_pool4k | fixed 4k windows | 0.0258 | +0.0085 | +0.0090 |
+| S3b_fresh2k | 2k fresh windows each night | **0.0173** | +0.0130 | +0.0186 |
+
+- **Fresh is worse than fixed at a larger size.** 2k fresh windows a night forget more than a fixed 4k pool, though
+  each window is replayed only ~4 times in all (against ~22). So item 3's "replays per window" should read
+  **replays per window per night**: 4.4 here, between the fixed 4k (2.2) and the fixed 1k (8.8).
+- **What this means for 3b:** the generated runs write 2,048 windows a night, so this is their ceiling if the
+  model's text were as good as real. The question they answer is unchanged (written against read text at an
+  equal count), but matching S1 would need ~16k written windows a night, ~0.5–2 h of decoding per night at
+  today's speed.
 
 ## Brain-like structure roadmap (moved from main's LOCAL_PLAN.md, Nov 2)
 The owner wants to "push the metaphor to the extreme". Clarified: brain-like in *structure*, not mimicking biology
