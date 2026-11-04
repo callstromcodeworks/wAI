@@ -326,6 +326,14 @@ def continual(a):
         vals = {n: rows_from(np.load(os.path.join(ddir, n, "val.npy")), 10 ** 9) for n in names}
         a.stages = len(names)
         val_ids = {n: np.load(os.path.join(ddir, n, "val.npy")) for n in names}
+        day_names = list(names)  # the specialty behind each day (reports and the oracle only)
+        if a.repeats > 1:  # 4b: each specialty's text in N disjoint parts, one per appearance; round r brings part r
+            if not a.stream:  # of every specialty, in the usual order
+                raise SystemExit("--repeats needs --stream")
+            parts = [np.array_split(x, a.repeats) for x in stages]
+            stages = [parts[k][r] for r in range(a.repeats) for k in range(len(names))]
+            day_names = [names[k] for r in range(a.repeats) for k in range(len(names))]
+            a.stages = len(stages)
     else:
         ids_train = np.load(os.path.join(HERE, "data", vocab, "crawl", "train.npy"))
         stages = np.array_split(ids_train, a.stages)
@@ -401,9 +409,12 @@ def continual(a):
     torch._dynamo.config.recompile_limit = max(torch._dynamo.config.recompile_limit, 64)
     fwd = torch.compile(model, dynamic=False) if a.compile else model
 
-    def train(params, steps, new_sources, new_share, lr):
+    def train(params, steps, new_sources, new_share, lr, track=None):
+        """track(step), if given, runs before the first step and every --track_every steps (and after the last)."""
         opt = torch.optim.AdamW(params, lr=lr, betas=(0.8, 0.95), eps=1e-10)
         model.train()
+        if track is not None:
+            track(0)
         for step in range(1, steps + 1):
             for g in opt.param_groups:
                 g["lr"] = lr * min(1.0, step / 10)
@@ -419,6 +430,8 @@ def continual(a):
                 (loss / a.accum).backward()
             opt.step()
             model.zero_grad(set_to_none=True)
+            if track is not None and (step % a.track_every == 0 or step == steps):
+                track(step)
 
     @torch.no_grad()
     def dissonance(rows, depths):
@@ -786,6 +799,50 @@ def continual(a):
     def studying():
         return [r for s in study if s["released"] is None for r in s["rows"]]
     reviewed = []  # --review_steps: nights with a review of earlier buffers, and its size
+    # recurring topics (--repeats, STRUCT_PLAN 4b). --practice: a day whose buffer matches a topic already held grows
+    # nothing; the parts grown when that topic first arrived are unfrozen and learn the new text (applying new
+    # knowledge to what is already there). Matching is label-free (states at depth D, as today@D); --practice_oracle
+    # matches by the specialty's name instead (control)
+    owner = {}  # day -> the day whose parts hold its topic
+    day_params, day_keys = {}, {}  # parts grown on a day (trainable tensors, part names)
+    buf_day = []  # the day of each entry of buffers
+    matches, tracks, parts_at = [], [], []
+    if (a.practice or a.practice_oracle) and not (a.stream and a.grow and not a.adapter and not exam_mode):
+        raise SystemExit("--practice needs --stream with grown modules, without adapters or --master_tol/--study_nights")
+    track_rows = ({n: rows_from(val_ids[n], a.track_rows) for n in names}
+                  if a.track_every and a.domains else None)
+
+    @torch.no_grad()
+    def match_topic(st, buf):
+        """The earlier day whose topic today's buffer continues, or None. Each of today's windows votes for the topic
+        holding most of its --surprise_k nearest neighbours (familiar text is a candidate too); a topic wins with at
+        least --match_share of the votes."""
+        held_by = sorted({owner[d] for d in buf_day[:-1]})
+        if not held_by:
+            return None, {}
+        if a.practice_oracle:
+            hit = [o for o in held_by if day_names[o] == day_names[st]]
+            return (hit[0] if hit else None), {}
+        d = a.surprise.partition("@")[2] or "6"
+        if not a.surprise.startswith("today"):
+            raise SystemExit("--practice matches on states: needs --surprise today@D")
+        rows_by = {o: [r for b, bd in zip(buffers[:-1], buf_day[:-1]) if owner[bd] == o for r in b] for o in held_by}
+        samp, lab = [], []
+        for o in held_by:
+            pick = rng.choice(len(rows_by[o]), min(a.match_rows, len(rows_by[o])), replace=False)
+            samp += [rows_by[o][i] for i in pick]
+            lab += [o] * len(pick)
+        f_today = nn.functional.normalize(read(buf), dim=-1)
+        pool = nn.functional.normalize(torch.cat([read(samp), familiar["ref"]]), dim=-1)
+        lab = torch.tensor(lab + [-1] * len(familiar["ref"]), device=pool.device)
+        votes = []
+        for i in range(0, len(f_today), 1024):
+            nb = lab[(f_today[i:i + 1024] @ pool.T).topk(a.surprise_k, dim=-1).indices]
+            votes.append(torch.mode(nb, dim=-1).values)
+        votes = torch.cat(votes)
+        share = {o: (votes == o).float().mean().item() for o in held_by}
+        best = max(share, key=share.get)
+        return (best if share[best] >= a.match_share else None), share
     if a.review_steps and not exam_mode:
         raise SystemExit("--review_steps needs --master_tol or --study_nights")
 
@@ -811,12 +868,13 @@ def continual(a):
                 curve.append(evaluate(f"day {st + 1} (quiet)"))
                 continue
             buffers.append(buf)
+            buf_day.append(st)
             if exam_mode:  # hold back the exam; the pre-test is the exam before anything is learned from it
                 perm = rng.permutation(len(buf))
                 n_exam = max(8, int(round(len(buf) * a.exam_share)))
                 exam = np.stack([buf[i] for i in perm[:n_exam]]).astype(np.int64)
                 buf = buffers[-1] = [buf[i] for i in perm[n_exam:]]
-                study.append(dict(day=st + 1, name=names[st], rows=buf, exam=exam,
+                study.append(dict(day=st + 1, name=day_names[st], rows=buf, exam=exam,
                                   u=[score(model, exam, token_bytes)], nights=0, released=None))
         rebuilt = None
         if a.old_refresh:  # control for --old_generate: as many old windows, fresh from the corpus every night
@@ -843,7 +901,21 @@ def continual(a):
         if mem is not None:  # instant: read the new text once, score everything before any training
             mem.arrive(names[st], new, a.memory_tokens)
             mem_curve.append(mem_evaluate(f"arrive {st + 1}"))
-        if not a.grow:  # standard baseline: fine-tune the whole model, same schedule (learn, then sleep)
+        matched = None
+        if (a.practice or a.practice_oracle) and buf is not None:  # a topic already held: its own parts learn
+            matched, share = match_topic(st, buf)
+            truth = [owner[bd] for bd in buf_day[:-1] if day_names[bd] == day_names[st]]
+            matches.append(dict(day=st + 1, name=day_names[st], matched=None if matched is None else matched + 1,
+                                share={day_names[o]: round(v, 3) for o, v in share.items()},
+                                correct=(matched in truth) if matched is not None else not truth))
+            print(f"  practice: day {st + 1} ({day_names[st]}) " +
+                  (f"continues day {matched + 1} ({day_names[matched]}): no growth, its parts "
+                   f"{','.join(day_keys[matched])} learn tonight" if matched is not None else "matches nothing held: grows") +
+                  (f" | votes " + " ".join(f"{day_names[o][:7]} {v:.2f}" for o, v in sorted(share.items(), key=lambda x: -x[1])[:3])
+                   if share else ""), flush=True)
+        if matched is not None:
+            params, keys = day_params[matched], []
+        elif not a.grow:  # standard baseline: fine-tune the whole model, same schedule (learn, then sleep)
             params, keys = [p for p in model.parameters()], []
         elif a.adapter:  # standard baseline: new adapters each stage, same parameter budget and schedule
             params, keys = add_adapters(st)
@@ -880,12 +952,23 @@ def continual(a):
             p.requires_grad_(True)
         if keys:
             layout.append(keys)
+        if a.stream:
+            owner[st] = matched if matched is not None else st
+            if matched is None:
+                day_params[st], day_keys[st] = params, keys
         lr = a.lr_adam if a.grow else a.lr_full
         if buf is not None:  # night, first part: learn from today's buffer (with the usual replay of general text)
             pools["new"] = studying() if exam_mode and not a.review_steps else buf  # ... or every buffer in study
         if old_pool:
             pools["old"] = old_pool
-        train(params, a.stage_steps, [new], 1.0 - a.replay, lr)
+        trk = None
+        if track_rows is not None:  # the day's specialty, scored during the wake (labels for analysis only)
+            tracks.append(dict(day=st + 1, name=day_names[st], step=[], bpb=[]))
+
+            def trk(step, t=tracks[-1], rows=track_rows[day_names[st]]):
+                t["step"].append(step)
+                t["bpb"].append(round(score(model, rows, token_bytes), 5))
+        train(params, a.stage_steps, [new], 1.0 - a.replay, lr, track=trk)
         if a.review_steps and len(study) > 1 and study[-1]["released"] is None:  # first night kept whole: earlier
             carry = [r for s in study[:-1] if s["released"] is None for r in s["rows"]]  # buffers in study review
             if carry:  # on top, with the same share of general text
@@ -926,7 +1009,9 @@ def continual(a):
                     report.append(f"day {s['day']} ({s['name'][:7]}) {s['u'][0]:.4f}->{s['u'][-1]:.4f}, "
                                   f"tonight {gain:+.4f}" + (" released" if s["released"] else ""))
             print(f"  exams: " + " | ".join(report) + f"; still in study: {len(studying())} windows", flush=True)
-        curve.append(evaluate(f"stage {st + 1} ({','.join(keys)})"))
+        parts_at.append(len(model.grown_at))
+        tag = ','.join(keys) if matched is None else 'practice: ' + ','.join(day_keys[matched])
+        curve.append(evaluate(f"stage {st + 1} ({tag})"))
         if mem is not None:  # the model changed: re-key the memory (and release what it has now learned)
             held = mem.reencode(prune=a.memory_prune or None)
             mem_curve.append(mem_evaluate(f"stage {st + 1}", held))
@@ -955,6 +1040,10 @@ def continual(a):
                old_refresh=a.old_refresh, old_generate=a.old_generate, rebuild_cue=a.rebuild_cue, rebuild_n=a.rebuild_n, gen_stats=gen_stats,
                master_tol=a.master_tol, exam_share=a.exam_share, study_nights=a.study_nights,
                review_steps=a.review_steps, reviewed=reviewed,
+               repeats=a.repeats, day_names=day_names if a.domains else None, practice=a.practice,
+               practice_oracle=a.practice_oracle, match_share=a.match_share, matches=matches,
+               owner={str(k + 1): v + 1 for k, v in owner.items()}, parts_at=parts_at, track_every=a.track_every,
+               tracks=tracks,
                study=[dict(day=s["day"], name=s["name"], rows=len(s["rows"]), exam_rows=len(s["exam"]), u=s["u"],
                            nights=s["nights"], released=s["released"]) for s in study])
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -1047,6 +1136,17 @@ def main():
                     "buffer held back as its exam (never studied)")
     ap.add_argument("--study_nights", type=int, default=0, help="stream control for --master_tol: each buffer is "
                     "studied exactly this many nights (the exam is measured, not used)")
+    ap.add_argument("--repeats", type=int, default=1, help="stream, recurring topics (STRUCT_PLAN 4b): each "
+                    "specialty's text in N disjoint parts, one per appearance; round r brings part r of every specialty")
+    ap.add_argument("--practice", type=int, default=0, help="stream: a day whose buffer matches a topic already held "
+                    "grows nothing; the parts grown for that topic are unfrozen and learn the new text")
+    ap.add_argument("--practice_oracle", type=int, default=0, help="stream control for --practice: match by name")
+    ap.add_argument("--match_share", type=float, default=0.5, help="practice: share of today's buffer windows whose "
+                    "neighbours are mostly one held topic, needed to match it")
+    ap.add_argument("--match_rows", type=int, default=256, help="practice: windows sampled per held topic")
+    ap.add_argument("--track_every", type=int, default=0, help="score the day's specialty (--track_rows held-out "
+                    "windows) every this many wake steps (drift and savings; labels for analysis only)")
+    ap.add_argument("--track_rows", type=int, default=64)
     ap.add_argument("--review_steps", type=int, default=0, help="stream, master_tol/study_nights: today's buffer gets "
                     "the whole wake (first night kept whole); earlier buffers still in study get this many extra steps")
     ap.add_argument("--gen_batch", type=int, default=32, help="stream: sequences written at once (old_generate/rebuild)")

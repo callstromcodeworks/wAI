@@ -430,6 +430,27 @@ Owner's answers (Nov 3):
    specialty) repeats 20/40/80 times. To be timed on the 2-repeat run before estimating the others.
 7. **With 4a:** a night of 1/n the steps improves an exam less, so 4a's 0.002 bpb release threshold would need
    scaling by n if 4a is kept.
+8. **Built (Nov 4; owner: "Yes but don't run it yet"). Not run, not smoke-tested on the GPU.**
+   - forgetting.py `--repeats N`: each specialty's text in N disjoint parts, round r brings part r of every
+     specialty in the usual order (10N days). Night lengths are set in the command (`--stage_steps 400/N
+     --consolidate_steps 200/N`).
+   - `--practice 1`: before growth, today's buffer is matched against the topics already held. Each window votes
+     for the topic holding most of its 30 nearest neighbors (states at depth 6; 256 windows sampled per held topic,
+     plus the familiar reference, which can win the vote). A topic with at least half the votes (`--match_share`)
+     is a match: nothing grows, and the parts grown on that topic's first day are unfrozen and learn tonight (wake
+     on today's buffer; sleep replays every buffer so far, the topic's earlier ones included, which keeps what the
+     parts already did). `--practice_oracle 1` matches by name (control). Every match is logged with its votes and
+     whether it was right.
+   - `--track_every 25`: the day's specialty is scored on 64 held-out windows every 25 wake steps (labels for
+     analysis only), for savings.
+   - recur_report.py: gain kept at the end (beside S1), after each appearance, drift while away, savings on return,
+     matching accuracy. Checked on synthetic data.
+   - Queue (struct_queue.sh, commented out): R2_grow, then R2_practice. ~2–2.5 h each (20 days; per-day overhead
+     still to be timed).
+   - **Risk:** R2_grow ends with ~60 grown parts (S1: 30). Training memory grows with parts (S3 runs reached ~8.4
+     GB at ~27–30), so it may not fit in 12 GB. If not: gradient checkpointing first (owner's order), or run the
+     baseline at fewer parts per day.
+   - Before the real runs: a ~5-minute smoke test (3 specialties × 2 appearances, short nights).
 
 ## Brain-like structure roadmap (moved from main's LOCAL_PLAN.md, Nov 2)
 The owner wants to "push the metaphor to the extreme". Clarified: brain-like in *structure*, not mimicking biology

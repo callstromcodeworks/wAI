@@ -47,6 +47,11 @@ jobs=(
   # 4a, first night kept whole (owner, Nov 3): today's buffer gets the whole wake as in S1; earlier buffers still in
   # study get 200 extra steps on top (75% their windows, 25% general text); release by exam as in S4a
   "forgetting/S4a_first|$S --master_tol 0.002 --review_steps 200 --name S4a_first"
+  # 4b. recurring topics, 2 appearances per specialty (20 days, nights at half length). Built Nov 4; NOT run yet
+  # (owner: "don't run it yet"). Uncomment to queue. R2_grow: the current recipe (grows 3 parts a day, ~60 by the
+  # end; watch GPU memory). R2_practice: a returning topic's own parts learn instead (label-free match).
+  # "forgetting/R2_grow|$S --repeats 2 --stage_steps 200 --consolidate_steps 100 --track_every 25 --name R2_grow"
+  # "forgetting/R2_practice|$S --repeats 2 --stage_steps 200 --consolidate_steps 100 --track_every 25 --practice 1 --name R2_practice"
 )
 mkdir -p runs/forgetting runs/selective
 for j in "${jobs[@]}"; do
