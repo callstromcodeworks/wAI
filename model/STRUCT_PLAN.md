@@ -352,7 +352,7 @@ window ~4.4 times in one night and never again).
   the brain's workaround for its own fallibility, not part of its structure, so 4a shouldn't be expected to help.
   The data agree: with its whole first night, a topic learns 70–88% of everything it ever learns in that night
   (S4a_first: Haskell 86%, Fortran 88%, Rust 78%, Lua 70%), and one night already passes over its buffer ~3 times.
-  The re-study test proposed above is dropped from the plan.
+  The re-study test proposed above is on hold until the owner chooses the next step.
 
 ### 2c. Interest: is "too surprising" worth storing? (setup, Nov 3)
 The owner: interest is critical to human learning, and surprise usually draws interest. But curiosity peaks at
