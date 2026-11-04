@@ -44,6 +44,9 @@ jobs=(
   "selective/P2d_C2s|selective_memory.py --policies buffer_p0.5,buffer_m0.01p0.5,buffer_p0.1"
   # 4a control: every buffer studied exactly 2 nights (S4a's mean was 2.4), exam measured but not used
   "forgetting/S4a_nights2|$S --study_nights 2 --name S4a_nights2"
+  # 4a, first night kept whole (owner, Nov 3): today's buffer gets the whole wake as in S1; earlier buffers still in
+  # study get 200 extra steps on top (75% their windows, 25% general text); release by exam as in S4a
+  "forgetting/S4a_first|$S --master_tol 0.002 --review_steps 200 --name S4a_first"
 )
 mkdir -p runs/forgetting runs/selective
 for j in "${jobs[@]}"; do

@@ -785,6 +785,9 @@ def continual(a):
 
     def studying():
         return [r for s in study if s["released"] is None for r in s["rows"]]
+    reviewed = []  # --review_steps: nights with a review of earlier buffers, and its size
+    if a.review_steps and not exam_mode:
+        raise SystemExit("--review_steps needs --master_tol or --study_nights")
 
     def experience(rows):
         nonlocal old_read
@@ -879,10 +882,16 @@ def continual(a):
             layout.append(keys)
         lr = a.lr_adam if a.grow else a.lr_full
         if buf is not None:  # night, first part: learn from today's buffer (with the usual replay of general text)
-            pools["new"] = studying() if exam_mode else buf  # ... or from every buffer still in study
+            pools["new"] = studying() if exam_mode and not a.review_steps else buf  # ... or every buffer in study
         if old_pool:
             pools["old"] = old_pool
         train(params, a.stage_steps, [new], 1.0 - a.replay, lr)
+        if a.review_steps and len(study) > 1 and study[-1]["released"] is None:  # first night kept whole: earlier
+            carry = [r for s in study[:-1] if s["released"] is None for r in s["rows"]]  # buffers in study review
+            if carry:  # on top, with the same share of general text
+                pools["new"] = carry
+                train(params, a.review_steps, [new], 1.0 - a.replay, lr)
+                reviewed.append(dict(stage=st + 1, steps=a.review_steps, windows=len(carry)))
         if a.overgrow > 1:  # most new neurons die; the ones that proved useful survive
             pruned.append(prune(keys[0], a.per_stage, new))
             print(f"  pruned {keys[0]}: harm {pruned[-1][0]} -> silenced {pruned[-1][1]}", flush=True)
@@ -945,6 +954,7 @@ def continual(a):
                stream_stats=stream_stats, old_pool=a.old_pool, old_from_days=a.old_from_days, old_read=old_read,
                old_refresh=a.old_refresh, old_generate=a.old_generate, rebuild_cue=a.rebuild_cue, rebuild_n=a.rebuild_n, gen_stats=gen_stats,
                master_tol=a.master_tol, exam_share=a.exam_share, study_nights=a.study_nights,
+               review_steps=a.review_steps, reviewed=reviewed,
                study=[dict(day=s["day"], name=s["name"], rows=len(s["rows"]), exam_rows=len(s["exam"]), u=s["u"],
                            nights=s["nights"], released=s["released"]) for s in study])
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -1037,6 +1047,8 @@ def main():
                     "buffer held back as its exam (never studied)")
     ap.add_argument("--study_nights", type=int, default=0, help="stream control for --master_tol: each buffer is "
                     "studied exactly this many nights (the exam is measured, not used)")
+    ap.add_argument("--review_steps", type=int, default=0, help="stream, master_tol/study_nights: today's buffer gets "
+                    "the whole wake (first night kept whole); earlier buffers still in study get this many extra steps")
     ap.add_argument("--gen_batch", type=int, default=32, help="stream: sequences written at once (old_generate/rebuild)")
     ap.add_argument("--old_pool", type=int, default=0, help="continual: replay old material from this many windows "
                     "kept from before (0 = the whole general corpus)")

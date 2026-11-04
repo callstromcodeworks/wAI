@@ -316,6 +316,14 @@ window ~4.4 times in one night and never again).
 - **Not tried:** each new buffer gets its whole first night as in S1, and the following nights' study comes on top.
   That keeps the gain for code without the cost for prose.
 
+**First night kept whole (owner, Nov 3: "First night variant"; S4a_first, from 11:52 PM):**
+- forgetting.py `--review_steps R`: today's buffer gets the whole wake as in S1. Earlier buffers still in study
+  then get R extra steps (75% their windows, 25% general text), and sleep replays every buffer in study. Release
+  by exam (0.002 bpb) as in S4a.
+- R = 200, about S4a's dose for carried-over buffers. The extra steps are on top, so the run trains more than S1
+  (up to 1,800 extra steps against S1's 6,000; the JSON's `reviewed` gives the count). If it wins, the control is
+  the same extra steps spent reviewing every earlier buffer, chosen without the exam.
+
 ### 2c. Interest: is "too surprising" worth storing? (setup, Nov 3)
 The owner: interest is critical to human learning, and surprise usually draws interest. But curiosity peaks at
 intermediate confidence (Kang et al. 2009) and infants look away from the too simple and the too random (Kidd et al.
