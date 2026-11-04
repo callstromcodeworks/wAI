@@ -298,6 +298,24 @@ window ~4.4 times in one night and never again).
   following progress. The control decides whether the exam's choice matters or just studying several nights:
   S4a_nights2, every buffer exactly 2 nights (S4a's mean 2.4), queued after P2d.
 
+**Control (S4a_nights2, 6:35–8:39 PM):** every buffer studied exactly 2 nights.
+
+| | S1 | S4a (exam decides) | S4a_nights2 (2 nights each) |
+|---|---|---|---|
+| mean | 0.0319 | 0.0313 | 0.0319 |
+| haskell / lua | 0.1191 / 0.0601 | 0.1022 / 0.0553 (4 and 5 nights) | 0.0940 / 0.0502 |
+| fortran / rust | 0.0652 / 0.0427 | 0.0880 / 0.0572 | 0.0906 / 0.0656 |
+| prose mean (medical, law, logic, music, space) | 0.0055 | 0.0018 | 0.0032 |
+| English / code drift | -0.0002 / +0.0010 | +0.0002 / +0.0015 | +0.0002 / +0.0016 |
+
+- **The exam decided nothing a fixed 2 nights doesn't.** All three runs have the same mean. The exam's extra nights
+  gave Haskell and Lua ~0.005–0.008, and releasing prose after one night cost about as much.
+- **What both 4a runs change against S1 is the schedule, not the test:** a second night lifts the code specialties
+  (Fortran +0.025, Rust +0.015–0.023; Rust's second night alone added 0.02–0.03), while sharing the first night
+  costs the prose specialties and Haskell.
+- **Not tried:** each new buffer gets its whole first night as in S1, and the following nights' study comes on top.
+  That keeps the gain for code without the cost for prose.
+
 ### 2c. Interest: is "too surprising" worth storing? (setup, Nov 3)
 The owner: interest is critical to human learning, and surprise usually draws interest. But curiosity peaks at
 intermediate confidence (Kang et al. 2009) and infants look away from the too simple and the too random (Kidd et al.
@@ -307,6 +325,26 @@ intermediate confidence (Kang et al. 2009) and infants look away from the too si
   Same capacity per day (500k episodes), so the band reads more text to fill it.
 - Prediction either way: an inverted U favors the band, but kNN memory helps most on rare tokens (names, library
   identifiers), which may be exactly the p < 1% ones.
+
+**Result (P2d, 5:12–6:35 PM):**
+
+| policy | text read | episodes | mean gain | per M episodes |
+|---|---|---|---|---|
+| p < 0.5 (third run; earlier 1.17%, 1.10%) | 8.30M | 5.00M | 0.97% | 0.194% |
+| band 0.01 <= p < 0.5 | 12.67M | 4.96M | **0.26%** | 0.053% |
+| p < 0.1 | 12.14M | 4.86M | **1.24%** | 0.254% |
+
+- **The "too surprising" tokens carry most of the memory's value.** Without them the gain falls by three
+  quarters (Lua 4.36% → 0.00%, Rust 2.69% → 1.42%, Haskell 0.98% → 0.39%). They are ~21% of all tokens, about a
+  third of the p < 0.5 ones.
+- **Stricter is better:** p < 0.1 beats p < 0.5 (1.24% against 0.97%, about 2 noise widths). The value of a stored
+  episode rises with surprise all the way; no inverted U.
+- **Noise:** p < 0.5 has now given 0.97%, 1.10% and 1.17%, so ~0.1 between reading orders (not 0.07).
+- **Reading:** the hippocampus is for what the cortex can't predict: names and identifiers that recur across
+  documents. In people that matches the isolation (von Restorff) effect: the item that stands out is the one
+  remembered. The inverted U belongs to choosing what to *study*, and 4a's progress rule is that half. So the
+  two halves of interest split across the two systems: novelty decides what the hippocampus keeps; progress decides
+  what the cortex studies.
 
 ### 4b plan: recurring topics and practice (owner: "plan for B afterwards"; not built)
 The owner's account: what gets used a lot becomes easier to recall, because the brain itself gets better at it.
