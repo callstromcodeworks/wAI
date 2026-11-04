@@ -324,6 +324,30 @@ window ~4.4 times in one night and never again).
   (up to 1,800 extra steps against S1's 6,000; the JSON's `reviewed` gives the count). If it wins, the control is
   the same extra steps spent reviewing every earlier buffer, chosen without the exam.
 
+**Result (S4a_first, 11:52 PM–2:12 AM; 1,600 review steps on 8 nights, +27% training):**
+
+| | S1 | S4a | S4a_nights2 | S4a_first |
+|---|---|---|---|---|
+| mean | 0.0319 | 0.0313 | 0.0319 | **0.0298** |
+| fortran / rust | 0.0652 / 0.0427 | 0.0880 / 0.0572 | 0.0906 / 0.0656 | 0.0850 / 0.0547 |
+| haskell | 0.1191 | 0.1022 | 0.0940 | 0.0910 |
+| prose mean (medical, law, logic, music, space) | 0.0055 | 0.0018 | 0.0032 | 0.0026 |
+| code drift | +0.0010 | +0.0015 | +0.0016 | +0.0023 |
+
+- **No better, with more training.** The mean is a little lower (within noise), and code drifts a little more.
+- **My explanation for the prose loss was wrong.** Today's buffer had the whole wake again, yet prose own-stage
+  gains stayed below every S1-type run (medical 0.0042 here; 0.0075–0.0099 in S1, S1o, S3_pool16k and S3_pool4k,
+  which share S1's first night). Sharing the wake was not the cause.
+- **Likely cause: who does the re-study.** Earlier parts are frozen after their night, so an earlier buffer can
+  only be studied again by *tonight's* parts, grown and placed for tonight's material. Here the review retrained
+  them on other material right after their wake. In S4a and S4a_nights2 they split the wake. Either way, tonight's
+  specialty loses part of its parts, and the old one is studied by parts grown for something else. That still
+  helps code (more capacity on it) and costs prose. Likely, not shown.
+- **What this means:** in this design, "several sessions" can't work as it does in the brain, where re-study
+  strengthens the circuits that already hold the material. That is 4b's mechanism (unfreeze the parts that hold
+  the topic). A direct test fits the 10-day benchmark: an earlier buffer still in study is re-studied by the parts
+  grown on its own night (label-free: the night that grew them), not by tonight's parts.
+
 ### 2c. Interest: is "too surprising" worth storing? (setup, Nov 3)
 The owner: interest is critical to human learning, and surprise usually draws interest. But curiosity peaks at
 intermediate confidence (Kang et al. 2009) and infants look away from the too simple and the too random (Kidd et al.
